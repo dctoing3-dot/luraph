@@ -1,418 +1,292 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR v2.0.0 - FIXED & OPTIMIZED FOR ROBLOX
+// NEPHILIM OBFUSCATOR v3.0.0 - REAL VM IMPLEMENTATION
+// Phase 1: AST Parser + Bytecode Compiler + VM Interpreter
 // ============================================================================
 
 export enum TokenType{NUMBER='NUMBER',STRING='STRING',BOOLEAN='BOOLEAN',NIL='NIL',IDENTIFIER='IDENTIFIER',AND='AND',BREAK='BREAK',DO='DO',ELSE='ELSE',ELSEIF='ELSEIF',END='END',FALSE='FALSE',FOR='FOR',FUNCTION='FUNCTION',GOTO='GOTO',IF='IF',IN='IN',LOCAL='LOCAL',NOT='NOT',OR='OR',REPEAT='REPEAT',RETURN='RETURN',THEN='THEN',TRUE='TRUE',UNTIL='UNTIL',WHILE='WHILE',CONTINUE='CONTINUE',PLUS='PLUS',MINUS='MINUS',STAR='STAR',SLASH='SLASH',DOUBLE_SLASH='DOUBLE_SLASH',PERCENT='PERCENT',CARET='CARET',HASH='HASH',EQ='EQ',NEQ='NEQ',LT='LT',GT='GT',LTE='LTE',GTE='GTE',ASSIGN='ASSIGN',LPAREN='LPAREN',RPAREN='RPAREN',LBRACE='LBRACE',RBRACE='RBRACE',LBRACKET='LBRACKET',RBRACKET='RBRACKET',SEMICOLON='SEMICOLON',COLON='COLON',DOUBLE_COLON='DOUBLE_COLON',COMMA='COMMA',DOT='DOT',DOT_DOT='DOT_DOT',DOT_DOT_DOT='DOT_DOT_DOT',EOF='EOF'}
 export interface Token{type:TokenType;value:string;literal?:any;line:number;column:number}
 const KEYWORDS:Record<string,TokenType>={'and':TokenType.AND,'break':TokenType.BREAK,'do':TokenType.DO,'else':TokenType.ELSE,'elseif':TokenType.ELSEIF,'end':TokenType.END,'false':TokenType.FALSE,'for':TokenType.FOR,'function':TokenType.FUNCTION,'goto':TokenType.GOTO,'if':TokenType.IF,'in':TokenType.IN,'local':TokenType.LOCAL,'nil':TokenType.NIL,'not':TokenType.NOT,'or':TokenType.OR,'repeat':TokenType.REPEAT,'return':TokenType.RETURN,'then':TokenType.THEN,'true':TokenType.TRUE,'until':TokenType.UNTIL,'while':TokenType.WHILE,'continue':TokenType.CONTINUE};
-export interface DebugLog{phase:string;message:string;data?:any}
-let debugLogs:DebugLog[]=[];let debugEnabled=false;
-export function enableDebug(enabled:boolean=true):void{debugEnabled=enabled;debugLogs=[];}
-export function getDebugLogs():DebugLog[]{return debugLogs;}
-function debug(phase:string,message:string,data?:any):void{if(debugEnabled)debugLogs.push({phase,message,data});}
 
 // ============================================================================
-// SHARED NAME GENERATOR
+// AST NODE TYPES
 // ============================================================================
-class NameGenerator{private chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';private counter=0;generate():string{return this.getName(this.counter++);}private getName(n:number):string{if(n<52)return this.chars[n];return this.getName(Math.floor(n/52)-1)+this.chars[n%52];}reset(){this.counter=0;}getCounter():number{return this.counter;}setCounter(n:number){this.counter=n;}}
-const globalNameGen=new NameGenerator();
+export type ASTNode=ProgramNode|StatementNode|ExpressionNode;
+export interface ProgramNode{type:'Program';body:StatementNode[]}
+export type StatementNode=LocalDeclaration|Assignment|FunctionDeclaration|LocalFunctionDeclaration|IfStatement|WhileStatement|RepeatStatement|ForNumericStatement|ForGenericStatement|ReturnStatement|BreakStatement|DoBlock|CallStatement|MethodCallStatement;
+export type ExpressionNode=Identifier|NumberLiteral|StringLiteral|BooleanLiteral|NilLiteral|VarargLiteral|BinaryExpression|UnaryExpression|TableConstructor|FunctionExpression|CallExpression|MethodCallExpression|IndexExpression|MemberExpression|TableField|TableFieldKey|ParenExpression;
+export interface Identifier{type:'Identifier';name:string}
+export interface NumberLiteral{type:'NumberLiteral';value:number}
+export interface StringLiteral{type:'StringLiteral';value:string}
+export interface BooleanLiteral{type:'BooleanLiteral';value:boolean}
+export interface NilLiteral{type:'NilLiteral'}
+export interface VarargLiteral{type:'VarargLiteral'}
+export interface BinaryExpression{type:'BinaryExpression';operator:string;left:ExpressionNode;right:ExpressionNode}
+export interface UnaryExpression{type:'UnaryExpression';operator:string;argument:ExpressionNode}
+export interface TableConstructor{type:'TableConstructor';fields:(TableField|TableFieldKey)[]}
+export interface TableField{type:'TableField';value:ExpressionNode}
+export interface TableFieldKey{type:'TableFieldKey';key:ExpressionNode;value:ExpressionNode}
+export interface FunctionExpression{type:'FunctionExpression';params:Identifier[];vararg:boolean;body:StatementNode[]}
+export interface CallExpression{type:'CallExpression';callee:ExpressionNode;arguments:ExpressionNode[]}
+export interface MethodCallExpression{type:'MethodCallExpression';object:ExpressionNode;method:string;arguments:ExpressionNode[]}
+export interface IndexExpression{type:'IndexExpression';object:ExpressionNode;index:ExpressionNode}
+export interface MemberExpression{type:'MemberExpression';object:ExpressionNode;property:string}
+export interface ParenExpression{type:'ParenExpression';expression:ExpressionNode}
+export interface LocalDeclaration{type:'LocalDeclaration';names:Identifier[];values:ExpressionNode[]}
+export interface Assignment{type:'Assignment';targets:ExpressionNode[];values:ExpressionNode[]}
+export interface FunctionDeclaration{type:'FunctionDeclaration';name:ExpressionNode;params:Identifier[];vararg:boolean;body:StatementNode[]}
+export interface LocalFunctionDeclaration{type:'LocalFunctionDeclaration';name:Identifier;params:Identifier[];vararg:boolean;body:StatementNode[]}
+export interface IfStatement{type:'IfStatement';condition:ExpressionNode;consequent:StatementNode[];alternatives:ElseifClause[];elseBody:StatementNode[]|null}
+export interface ElseifClause{type:'ElseifClause';condition:ExpressionNode;body:StatementNode[]}
+export interface WhileStatement{type:'WhileStatement';condition:ExpressionNode;body:StatementNode[]}
+export interface RepeatStatement{type:'RepeatStatement';condition:ExpressionNode;body:StatementNode[]}
+export interface ForNumericStatement{type:'ForNumericStatement';variable:Identifier;start:ExpressionNode;end:ExpressionNode;step:ExpressionNode|null;body:StatementNode[]}
+export interface ForGenericStatement{type:'ForGenericStatement';variables:Identifier[];iterators:ExpressionNode[];body:StatementNode[]}
+export interface ReturnStatement{type:'ReturnStatement';values:ExpressionNode[]}
+export interface BreakStatement{type:'BreakStatement'}
+export interface DoBlock{type:'DoBlock';body:StatementNode[]}
+export interface CallStatement{type:'CallStatement';expression:CallExpression}
+export interface MethodCallStatement{type:'MethodCallStatement';expression:MethodCallExpression}
 
 // ============================================================================
 // LEXER
 // ============================================================================
-export class Lexer{private source:string;private tokens:Token[]=[];private start=0;private current=0;private line=1;private column=1;private startColumn=1;constructor(source:string){this.source=source;}public tokenize():Token[]{while(!this.isAtEnd()){this.start=this.current;this.startColumn=this.column;this.scanToken();}this.tokens.push({type:TokenType.EOF,value:'',line:this.line,column:this.column});return this.tokens;}private scanToken():void{const c=this.advance();switch(c){case'(':this.addToken(TokenType.LPAREN);break;case')':this.addToken(TokenType.RPAREN);break;case'{':this.addToken(TokenType.LBRACE);break;case'}':this.addToken(TokenType.RBRACE);break;case']':this.addToken(TokenType.RBRACKET);break;case'+':this.addToken(TokenType.PLUS);break;case'*':this.addToken(TokenType.STAR);break;case'%':this.addToken(TokenType.PERCENT);break;case'^':this.addToken(TokenType.CARET);break;case'#':this.addToken(TokenType.HASH);break;case';':this.addToken(TokenType.SEMICOLON);break;case',':this.addToken(TokenType.COMMA);break;case'.':if(this.match('.'))this.addToken(this.match('.')?TokenType.DOT_DOT_DOT:TokenType.DOT_DOT);else if(this.isDigit(this.peek()))this.number();else this.addToken(TokenType.DOT);break;case'-':if(this.match('-'))this.comment();else this.addToken(TokenType.MINUS);break;case'/':this.addToken(this.match('/')?TokenType.DOUBLE_SLASH:TokenType.SLASH);break;case':':this.addToken(this.match(':')?TokenType.DOUBLE_COLON:TokenType.COLON);break;case'[':if(this.peek()==='['||this.peek()==='=')this.longString();else this.addToken(TokenType.LBRACKET);break;case'=':this.addToken(this.match('=')?TokenType.EQ:TokenType.ASSIGN);break;case'~':if(this.match('='))this.addToken(TokenType.NEQ);break;case'<':this.addToken(this.match('=')?TokenType.LTE:TokenType.LT);break;case'>':this.addToken(this.match('=')?TokenType.GTE:TokenType.GT);break;case'"':case"'":this.string(c);break;case' ':case'\r':case'\t':break;case'\n':this.line++;this.column=1;break;default:if(this.isDigit(c))this.number();else if(this.isAlpha(c))this.identifier();break;}}private string(quote:string):void{let value='';while(!this.isAtEnd()&&this.peek()!==quote){if(this.peek()==='\n'){this.line++;this.column=1;}if(this.peek()==='\\'){this.advance();if(!this.isAtEnd()){const esc=this.advance();switch(esc){case'n':value+='\n';break;case't':value+='\t';break;case'r':value+='\r';break;case'\\':value+='\\';break;case'"':value+='"';break;case"'":value+="'";break;case'0':value+='\0';break;case'x':if(this.isHexDigit(this.peek())&&this.isHexDigit(this.peekNext())){value+=String.fromCharCode(parseInt(this.advance()+this.advance(),16));}break;default:if(this.isDigit(esc)){let dec=esc;if(this.isDigit(this.peek()))dec+=this.advance();if(this.isDigit(this.peek()))dec+=this.advance();value+=String.fromCharCode(parseInt(dec,10));}else value+=esc;}}}else value+=this.advance();}if(!this.isAtEnd())this.advance();this.addToken(TokenType.STRING,value);}private longString():void{let level=0;while(this.peek()==='='){this.advance();level++;}if(this.peek()!=='['){this.addToken(TokenType.LBRACKET);return;}this.advance();if(this.peek()==='\n'){this.advance();this.line++;this.column=1;}let value='';const closing=']'+'='.repeat(level)+']';while(!this.isAtEnd()){if(this.peek()==='\n'){value+=this.advance();this.line++;this.column=1;}else if(this.checkSeq(closing)){for(let i=0;i<closing.length;i++)this.advance();break;}else value+=this.advance();}this.addToken(TokenType.STRING,value);}private number():void{if(this.source[this.start]==='0'){const next=this.peek().toLowerCase();if(next==='x'){this.advance();while(this.isHexDigit(this.peek())||this.peek()==='_')this.advance();this.addToken(TokenType.NUMBER,parseInt(this.source.substring(this.start,this.current).replace(/_/g,''),16));return;}else if(next==='b'){this.advance();while(this.peek()==='0'||this.peek()==='1'||this.peek()==='_')this.advance();this.addToken(TokenType.NUMBER,parseInt(this.source.substring(this.start+2,this.current).replace(/_/g,''),2));return;}}while(this.isDigit(this.peek())||this.peek()==='_')this.advance();if(this.peek()==='.'&&this.isDigit(this.peekNext())){this.advance();while(this.isDigit(this.peek())||this.peek()==='_')this.advance();}if(this.peek().toLowerCase()==='e'){this.advance();if(this.peek()==='+'||this.peek()==='-')this.advance();while(this.isDigit(this.peek()))this.advance();}this.addToken(TokenType.NUMBER,parseFloat(this.source.substring(this.start,this.current).replace(/_/g,'')));}private identifier():void{while(this.isAlphaNumeric(this.peek()))this.advance();const text=this.source.substring(this.start,this.current);const kw=KEYWORDS[text];if(kw!==undefined){if(kw===TokenType.TRUE)this.addToken(TokenType.TRUE,true);else if(kw===TokenType.FALSE)this.addToken(TokenType.FALSE,false);else if(kw===TokenType.NIL)this.addToken(TokenType.NIL,null);else this.addToken(kw);}else this.addToken(TokenType.IDENTIFIER,text);}private comment():void{if(this.peek()==='['&&(this.peekNext()==='['||this.peekNext()==='=')){this.advance();let level=0;while(this.peek()==='='){this.advance();level++;}if(this.peek()==='['){this.advance();const closing=']'+'='.repeat(level)+']';while(!this.isAtEnd()){if(this.peek()==='\n'){this.advance();this.line++;this.column=1;}else if(this.checkSeq(closing)){for(let i=0;i<closing.length;i++)this.advance();break;}else this.advance();}}}else{while(!this.isAtEnd()&&this.peek()!=='\n')this.advance();}}private isAtEnd():boolean{return this.current>=this.source.length;}private advance():string{const c=this.source[this.current];this.current++;this.column++;return c;}private peek():string{return this.isAtEnd()?'\0':this.source[this.current];}private peekNext():string{return this.current+1>=this.source.length?'\0':this.source[this.current+1];}private match(expected:string):boolean{if(this.isAtEnd()||this.source[this.current]!==expected)return false;this.current++;this.column++;return true;}private checkSeq(seq:string):boolean{for(let i=0;i<seq.length;i++){if(this.current+i>=this.source.length||this.source[this.current+i]!==seq[i])return false;}return true;}private isDigit(c:string):boolean{return c>='0'&&c<='9';}private isHexDigit(c:string):boolean{return this.isDigit(c)||(c>='a'&&c<='f')||(c>='A'&&c<='F');}private isAlpha(c:string):boolean{return(c>='a'&&c<='z')||(c>='A'&&c<='Z')||c==='_';}private isAlphaNumeric(c:string):boolean{return this.isAlpha(c)||this.isDigit(c);}private addToken(type:TokenType,literal?:any):void{const text=this.source.substring(this.start,this.current);this.tokens.push({type,value:text,literal:literal!==undefined?literal:text,line:this.line,column:this.startColumn});}}
+export class Lexer{private source:string;private tokens:Token[]=[];private start=0;private current=0;private line=1;private column=1;private startColumn=1;constructor(source:string){this.source=source;}tokenize():Token[]{while(!this.isAtEnd()){this.start=this.current;this.startColumn=this.column;this.scanToken();}this.tokens.push({type:TokenType.EOF,value:'',line:this.line,column:this.column});return this.tokens;}private scanToken():void{const c=this.advance();switch(c){case'(':this.addToken(TokenType.LPAREN);break;case')':this.addToken(TokenType.RPAREN);break;case'{':this.addToken(TokenType.LBRACE);break;case'}':this.addToken(TokenType.RBRACE);break;case']':this.addToken(TokenType.RBRACKET);break;case'+':this.addToken(TokenType.PLUS);break;case'*':this.addToken(TokenType.STAR);break;case'%':this.addToken(TokenType.PERCENT);break;case'^':this.addToken(TokenType.CARET);break;case'#':this.addToken(TokenType.HASH);break;case';':this.addToken(TokenType.SEMICOLON);break;case',':this.addToken(TokenType.COMMA);break;case'.':if(this.match('.'))this.addToken(this.match('.')?TokenType.DOT_DOT_DOT:TokenType.DOT_DOT);else if(this.isDigit(this.peek()))this.number();else this.addToken(TokenType.DOT);break;case'-':if(this.match('-'))this.comment();else this.addToken(TokenType.MINUS);break;case'/':this.addToken(this.match('/')?TokenType.DOUBLE_SLASH:TokenType.SLASH);break;case':':this.addToken(this.match(':')?TokenType.DOUBLE_COLON:TokenType.COLON);break;case'[':if(this.peek()==='['||this.peek()==='=')this.longString();else this.addToken(TokenType.LBRACKET);break;case'=':this.addToken(this.match('=')?TokenType.EQ:TokenType.ASSIGN);break;case'~':if(this.match('='))this.addToken(TokenType.NEQ);break;case'<':this.addToken(this.match('=')?TokenType.LTE:TokenType.LT);break;case'>':this.addToken(this.match('=')?TokenType.GTE:TokenType.GT);break;case'"':case"'":this.string(c);break;case' ':case'\r':case'\t':break;case'\n':this.line++;this.column=1;break;default:if(this.isDigit(c))this.number();else if(this.isAlpha(c))this.identifier();break;}}private string(quote:string):void{let value='';while(!this.isAtEnd()&&this.peek()!==quote){if(this.peek()==='\n'){this.line++;this.column=1;}if(this.peek()==='\\'){this.advance();if(!this.isAtEnd()){const esc=this.advance();switch(esc){case'n':value+='\n';break;case't':value+='\t';break;case'r':value+='\r';break;case'\\':value+='\\';break;case'"':value+='"';break;case"'":value+="'";break;case'0':value+='\0';break;case'x':if(this.isHexDigit(this.peek())&&this.isHexDigit(this.peekNext())){value+=String.fromCharCode(parseInt(this.advance()+this.advance(),16));}break;case'z':while(!this.isAtEnd()&&(this.peek()===' '||this.peek()==='\t'||this.peek()==='\n'||this.peek()==='\r')){if(this.peek()==='\n'){this.line++;this.column=1;}this.advance();}break;default:if(this.isDigit(esc)){let dec=esc;if(this.isDigit(this.peek()))dec+=this.advance();if(this.isDigit(this.peek()))dec+=this.advance();value+=String.fromCharCode(parseInt(dec,10));}else value+=esc;}}}else value+=this.advance();}if(!this.isAtEnd())this.advance();this.addToken(TokenType.STRING,value);}private longString():void{let level=0;while(this.peek()==='='){this.advance();level++;}if(this.peek()!=='['){this.addToken(TokenType.LBRACKET);return;}this.advance();if(this.peek()==='\n'){this.advance();this.line++;this.column=1;}let value='';const closing=']'+'='.repeat(level)+']';while(!this.isAtEnd()){if(this.peek()==='\n'){value+=this.advance();this.line++;this.column=1;}else if(this.checkSeq(closing)){for(let i=0;i<closing.length;i++)this.advance();break;}else value+=this.advance();}this.addToken(TokenType.STRING,value);}private number():void{if(this.source[this.start]==='0'){const next=this.peek().toLowerCase();if(next==='x'){this.advance();while(this.isHexDigit(this.peek())||this.peek()==='_')this.advance();this.addToken(TokenType.NUMBER,parseInt(this.source.substring(this.start,this.current).replace(/_/g,''),16));return;}else if(next==='b'){this.advance();while(this.peek()==='0'||this.peek()==='1'||this.peek()==='_')this.advance();this.addToken(TokenType.NUMBER,parseInt(this.source.substring(this.start+2,this.current).replace(/_/g,''),2));return;}}while(this.isDigit(this.peek())||this.peek()==='_')this.advance();if(this.peek()==='.'&&this.isDigit(this.peekNext())){this.advance();while(this.isDigit(this.peek())||this.peek()==='_')this.advance();}if(this.peek().toLowerCase()==='e'){this.advance();if(this.peek()==='+'||this.peek()==='-')this.advance();while(this.isDigit(this.peek()))this.advance();}this.addToken(TokenType.NUMBER,parseFloat(this.source.substring(this.start,this.current).replace(/_/g,'')));}private identifier():void{while(this.isAlphaNumeric(this.peek()))this.advance();const text=this.source.substring(this.start,this.current);const kw=KEYWORDS[text];if(kw!==undefined){if(kw===TokenType.TRUE)this.addToken(TokenType.TRUE,true);else if(kw===TokenType.FALSE)this.addToken(TokenType.FALSE,false);else if(kw===TokenType.NIL)this.addToken(TokenType.NIL,null);else this.addToken(kw);}else this.addToken(TokenType.IDENTIFIER,text);}private comment():void{if(this.peek()==='['&&(this.peekNext()==='['||this.peekNext()==='=')){this.advance();let level=0;while(this.peek()==='='){this.advance();level++;}if(this.peek()==='['){this.advance();const closing=']'+'='.repeat(level)+']';while(!this.isAtEnd()){if(this.peek()==='\n'){this.advance();this.line++;this.column=1;}else if(this.checkSeq(closing)){for(let i=0;i<closing.length;i++)this.advance();break;}else this.advance();}}}else{while(!this.isAtEnd()&&this.peek()!=='\n')this.advance();}}private isAtEnd():boolean{return this.current>=this.source.length;}private advance():string{const c=this.source[this.current];this.current++;this.column++;return c;}private peek():string{return this.isAtEnd()?'\0':this.source[this.current];}private peekNext():string{return this.current+1>=this.source.length?'\0':this.source[this.current+1];}private match(expected:string):boolean{if(this.isAtEnd()||this.source[this.current]!==expected)return false;this.current++;this.column++;return true;}private checkSeq(seq:string):boolean{for(let i=0;i<seq.length;i++){if(this.current+i>=this.source.length||this.source[this.current+i]!==seq[i])return false;}return true;}private isDigit(c:string):boolean{return c>='0'&&c<='9';}private isHexDigit(c:string):boolean{return this.isDigit(c)||(c>='a'&&c<='f')||(c>='A'&&c<='F');}private isAlpha(c:string):boolean{return(c>='a'&&c<='z')||(c>='A'&&c<='Z')||c==='_';}private isAlphaNumeric(c:string):boolean{return this.isAlpha(c)||this.isDigit(c);}private addToken(type:TokenType,literal?:any):void{const text=this.source.substring(this.start,this.current);this.tokens.push({type,value:text,literal:literal!==undefined?literal:text,line:this.line,column:this.startColumn});}}
 export function tokenize(source:string):Token[]{return new Lexer(source).tokenize();}
-
 // ============================================================================
-// HELPERS - FIXED STRING ENCODING (NO \u{} BUG!)
+// AST PARSER - Converts Tokens to AST
 // ============================================================================
-class NumFmt{static fmt(n:number):string{if(n<0)return`-${this.fmt(-n)}`;if(!Number.isInteger(n))return n.toString();const r=Math.random();if(r<0.25)return n.toString();if(r<0.5)return`0x${n.toString(16).toUpperCase()}`;if(r<0.75)return`0x${n.toString(16)}`;return n.toString();}static fmtSafe(n:number):string{if(n<0)return`-${this.fmtSafe(-n)}`;if(!Number.isInteger(n))return n.toString();if(n<16)return n.toString();const r=Math.random();if(r<0.5)return`0x${n.toString(16).toUpperCase()}`;return`0x${n.toString(16)}`;}}
-
-// FIXED: Only use \xXX format, never \u{} which breaks in Lua!
-class StrEnc{static enc(s:string,k:number):string{let r='';for(let i=0;i<s.length;i++){const c=(s.charCodeAt(i)^k)&0xFF;r+=`\\x${c.toString(16).padStart(2,'0')}`;}return r;}}
-
+export class Parser{private tokens:Token[];private current=0;constructor(tokens:Token[]){this.tokens=tokens;}parse():ProgramNode{const body:StatementNode[]=[];while(!this.isAtEnd()){const stmt=this.parseStatement();if(stmt)body.push(stmt);}return{type:'Program',body};}private parseStatement():StatementNode|null{if(this.check(TokenType.SEMICOLON)){this.advance();return null;}if(this.match(TokenType.LOCAL)){if(this.check(TokenType.FUNCTION)){return this.parseLocalFunction();}return this.parseLocalDeclaration();}if(this.match(TokenType.FUNCTION)){return this.parseFunctionDeclaration();}if(this.match(TokenType.IF)){return this.parseIfStatement();}if(this.match(TokenType.WHILE)){return this.parseWhileStatement();}if(this.match(TokenType.REPEAT)){return this.parseRepeatStatement();}if(this.match(TokenType.FOR)){return this.parseForStatement();}if(this.match(TokenType.RETURN)){return this.parseReturnStatement();}if(this.match(TokenType.BREAK)){return{type:'BreakStatement'};}if(this.match(TokenType.DO)){return this.parseDoBlock();}return this.parseExpressionStatement();}private parseLocalDeclaration():LocalDeclaration{const names:Identifier[]=[];do{const name=this.consume(TokenType.IDENTIFIER,'Expected variable name');names.push({type:'Identifier',name:name.literal});}while(this.match(TokenType.COMMA));let values:ExpressionNode[]=[];if(this.match(TokenType.ASSIGN)){do{values.push(this.parseExpression());}while(this.match(TokenType.COMMA));}return{type:'LocalDeclaration',names,values};}private parseLocalFunction():LocalFunctionDeclaration{this.consume(TokenType.FUNCTION,'Expected function');const name=this.consume(TokenType.IDENTIFIER,'Expected function name');this.consume(TokenType.LPAREN,'Expected (');const{params,vararg}=this.parseParamList();this.consume(TokenType.RPAREN,'Expected )');const body=this.parseBlock();this.consume(TokenType.END,'Expected end');return{type:'LocalFunctionDeclaration',name:{type:'Identifier',name:name.literal},params,vararg,body};}private parseFunctionDeclaration():FunctionDeclaration{let name:ExpressionNode={type:'Identifier',name:this.consume(TokenType.IDENTIFIER,'Expected function name').literal};while(this.match(TokenType.DOT)){const prop=this.consume(TokenType.IDENTIFIER,'Expected property name');name={type:'MemberExpression',object:name,property:prop.literal};}let isMethod=false;if(this.match(TokenType.COLON)){isMethod=true;const method=this.consume(TokenType.IDENTIFIER,'Expected method name');name={type:'MemberExpression',object:name,property:method.literal};}this.consume(TokenType.LPAREN,'Expected (');const{params,vararg}=this.parseParamList();if(isMethod){params.unshift({type:'Identifier',name:'self'});}this.consume(TokenType.RPAREN,'Expected )');const body=this.parseBlock();this.consume(TokenType.END,'Expected end');return{type:'FunctionDeclaration',name,params,vararg,body};}private parseParamList():{params:Identifier[];vararg:boolean}{const params:Identifier[]=[];let vararg=false;if(!this.check(TokenType.RPAREN)){do{if(this.match(TokenType.DOT_DOT_DOT)){vararg=true;break;}const param=this.consume(TokenType.IDENTIFIER,'Expected parameter name');params.push({type:'Identifier',name:param.literal});}while(this.match(TokenType.COMMA));}return{params,vararg};}private parseIfStatement():IfStatement{const condition=this.parseExpression();this.consume(TokenType.THEN,'Expected then');const consequent=this.parseBlock();const alternatives:ElseifClause[]=[];while(this.match(TokenType.ELSEIF)){const altCondition=this.parseExpression();this.consume(TokenType.THEN,'Expected then');const altBody=this.parseBlock();alternatives.push({type:'ElseifClause',condition:altCondition,body:altBody});}let elseBody:StatementNode[]|null=null;if(this.match(TokenType.ELSE)){elseBody=this.parseBlock();}this.consume(TokenType.END,'Expected end');return{type:'IfStatement',condition,consequent,alternatives,elseBody};}private parseWhileStatement():WhileStatement{const condition=this.parseExpression();this.consume(TokenType.DO,'Expected do');const body=this.parseBlock();this.consume(TokenType.END,'Expected end');return{type:'WhileStatement',condition,body};}private parseRepeatStatement():RepeatStatement{const body=this.parseBlock();this.consume(TokenType.UNTIL,'Expected until');const condition=this.parseExpression();return{type:'RepeatStatement',condition,body};}private parseForStatement():ForNumericStatement|ForGenericStatement{const firstName=this.consume(TokenType.IDENTIFIER,'Expected variable name');if(this.match(TokenType.ASSIGN)){const start=this.parseExpression();this.consume(TokenType.COMMA,'Expected ,');const end=this.parseExpression();let step:ExpressionNode|null=null;if(this.match(TokenType.COMMA)){step=this.parseExpression();}this.consume(TokenType.DO,'Expected do');const body=this.parseBlock();this.consume(TokenType.END,'Expected end');return{type:'ForNumericStatement',variable:{type:'Identifier',name:firstName.literal},start,end,step,body};}else{const variables:Identifier[]=[{type:'Identifier',name:firstName.literal}];while(this.match(TokenType.COMMA)){const name=this.consume(TokenType.IDENTIFIER,'Expected variable name');variables.push({type:'Identifier',name:name.literal});}this.consume(TokenType.IN,'Expected in');const iterators:ExpressionNode[]=[];do{iterators.push(this.parseExpression());}while(this.match(TokenType.COMMA));this.consume(TokenType.DO,'Expected do');const body=this.parseBlock();this.consume(TokenType.END,'Expected end');return{type:'ForGenericStatement',variables,iterators,body};}}private parseReturnStatement():ReturnStatement{const values:ExpressionNode[]=[];if(!this.check(TokenType.END)&&!this.check(TokenType.ELSE)&&!this.check(TokenType.ELSEIF)&&!this.check(TokenType.UNTIL)&&!this.isAtEnd()&&!this.check(TokenType.SEMICOLON)){do{values.push(this.parseExpression());}while(this.match(TokenType.COMMA));}this.match(TokenType.SEMICOLON);return{type:'ReturnStatement',values};}private parseDoBlock():DoBlock{const body=this.parseBlock();this.consume(TokenType.END,'Expected end');return{type:'DoBlock',body};}private parseBlock():StatementNode[]{const statements:StatementNode[]=[];while(!this.check(TokenType.END)&&!this.check(TokenType.ELSE)&&!this.check(TokenType.ELSEIF)&&!this.check(TokenType.UNTIL)&&!this.isAtEnd()){const stmt=this.parseStatement();if(stmt)statements.push(stmt);}return statements;}private parseExpressionStatement():StatementNode{const expr=this.parsePrefixExpression();if(expr.type==='CallExpression'){return{type:'CallStatement',expression:expr};}if(expr.type==='MethodCallExpression'){return{type:'MethodCallStatement',expression:expr};}const targets:ExpressionNode[]=[expr];while(this.match(TokenType.COMMA)){targets.push(this.parsePrefixExpression());}this.consume(TokenType.ASSIGN,'Expected =');const values:ExpressionNode[]=[];do{values.push(this.parseExpression());}while(this.match(TokenType.COMMA));return{type:'Assignment',targets,values};}private parseExpression():ExpressionNode{return this.parseOr();}private parseOr():ExpressionNode{let left=this.parseAnd();while(this.match(TokenType.OR)){const right=this.parseAnd();left={type:'BinaryExpression',operator:'or',left,right};}return left;}private parseAnd():ExpressionNode{let left=this.parseComparison();while(this.match(TokenType.AND)){const right=this.parseComparison();left={type:'BinaryExpression',operator:'and',left,right};}return left;}private parseComparison():ExpressionNode{let left=this.parseConcat();while(this.match(TokenType.LT)||this.match(TokenType.GT)||this.match(TokenType.LTE)||this.match(TokenType.GTE)||this.match(TokenType.EQ)||this.match(TokenType.NEQ)){const operator=this.previous().value;const right=this.parseConcat();left={type:'BinaryExpression',operator,left,right};}return left;}private parseConcat():ExpressionNode{let left=this.parseAdditive();if(this.match(TokenType.DOT_DOT)){const right=this.parseConcat();return{type:'BinaryExpression',operator:'..',left,right};}return left;}private parseAdditive():ExpressionNode{let left=this.parseMultiplicative();while(this.match(TokenType.PLUS)||this.match(TokenType.MINUS)){const operator=this.previous().value;const right=this.parseMultiplicative();left={type:'BinaryExpression',operator,left,right};}return left;}private parseMultiplicative():ExpressionNode{let left=this.parseUnary();while(this.match(TokenType.STAR)||this.match(TokenType.SLASH)||this.match(TokenType.DOUBLE_SLASH)||this.match(TokenType.PERCENT)){const operator=this.previous().value;const right=this.parseUnary();left={type:'BinaryExpression',operator,left,right};}return left;}private parseUnary():ExpressionNode{if(this.match(TokenType.NOT)||this.match(TokenType.MINUS)||this.match(TokenType.HASH)){const operator=this.previous().value;const argument=this.parseUnary();return{type:'UnaryExpression',operator,argument};}return this.parsePower();}private parsePower():ExpressionNode{let left=this.parsePrefixExpression();if(this.match(TokenType.CARET)){const right=this.parseUnary();return{type:'BinaryExpression',operator:'^',left,right};}return left;}private parsePrefixExpression():ExpressionNode{let expr=this.parsePrimary();while(true){if(this.match(TokenType.DOT)){const property=this.consume(TokenType.IDENTIFIER,'Expected property name');expr={type:'MemberExpression',object:expr,property:property.literal};}else if(this.match(TokenType.LBRACKET)){const index=this.parseExpression();this.consume(TokenType.RBRACKET,'Expected ]');expr={type:'IndexExpression',object:expr,index};}else if(this.match(TokenType.COLON)){const method=this.consume(TokenType.IDENTIFIER,'Expected method name');this.consume(TokenType.LPAREN,'Expected (');const args=this.parseArgList();this.consume(TokenType.RPAREN,'Expected )');expr={type:'MethodCallExpression',object:expr,method:method.literal,arguments:args};}else if(this.match(TokenType.LPAREN)){const args=this.parseArgList();this.consume(TokenType.RPAREN,'Expected )');expr={type:'CallExpression',callee:expr,arguments:args};}else if(this.check(TokenType.STRING)){const arg=this.advance();expr={type:'CallExpression',callee:expr,arguments:[{type:'StringLiteral',value:arg.literal}]};}else if(this.check(TokenType.LBRACE)){const table=this.parseTableConstructor();expr={type:'CallExpression',callee:expr,arguments:[table]};}else{break;}}return expr;}private parseArgList():ExpressionNode[]{const args:ExpressionNode[]=[];if(!this.check(TokenType.RPAREN)){do{args.push(this.parseExpression());}while(this.match(TokenType.COMMA));}return args;}private parsePrimary():ExpressionNode{if(this.match(TokenType.NIL)){return{type:'NilLiteral'};}if(this.match(TokenType.TRUE)){return{type:'BooleanLiteral',value:true};}if(this.match(TokenType.FALSE)){return{type:'BooleanLiteral',value:false};}if(this.match(TokenType.NUMBER)){return{type:'NumberLiteral',value:this.previous().literal};}if(this.match(TokenType.STRING)){return{type:'StringLiteral',value:this.previous().literal};}if(this.match(TokenType.DOT_DOT_DOT)){return{type:'VarargLiteral'};}if(this.match(TokenType.FUNCTION)){return this.parseFunctionExpression();}if(this.match(TokenType.LBRACE)){return this.parseTableConstructor();}if(this.match(TokenType.LPAREN)){const expr=this.parseExpression();this.consume(TokenType.RPAREN,'Expected )');return{type:'ParenExpression',expression:expr};}if(this.match(TokenType.IDENTIFIER)){return{type:'Identifier',name:this.previous().literal};}throw new Error(`Unexpected token: ${this.peek().value} at line ${this.peek().line}`);}private parseFunctionExpression():FunctionExpression{this.consume(TokenType.LPAREN,'Expected (');const{params,vararg}=this.parseParamList();this.consume(TokenType.RPAREN,'Expected )');const body=this.parseBlock();this.consume(TokenType.END,'Expected end');return{type:'FunctionExpression',params,vararg,body};}private parseTableConstructor():TableConstructor{const fields:(TableField|TableFieldKey)[]=[];if(!this.check(TokenType.RBRACE)){do{if(this.check(TokenType.RBRACE))break;if(this.match(TokenType.LBRACKET)){const key=this.parseExpression();this.consume(TokenType.RBRACKET,'Expected ]');this.consume(TokenType.ASSIGN,'Expected =');const value=this.parseExpression();fields.push({type:'TableFieldKey',key,value});}else if(this.check(TokenType.IDENTIFIER)&&this.peekNext()?.type===TokenType.ASSIGN){const key=this.advance();this.consume(TokenType.ASSIGN,'Expected =');const value=this.parseExpression();fields.push({type:'TableFieldKey',key:{type:'StringLiteral',value:key.literal},value});}else{const value=this.parseExpression();fields.push({type:'TableField',value});}}while(this.match(TokenType.COMMA)||this.match(TokenType.SEMICOLON));}this.consume(TokenType.RBRACE,'Expected }');return{type:'TableConstructor',fields};}private match(...types:TokenType[]):boolean{for(const type of types){if(this.check(type)){this.advance();return true;}}return false;}private check(type:TokenType):boolean{if(this.isAtEnd())return false;return this.peek().type===type;}private advance():Token{if(!this.isAtEnd())this.current++;return this.previous();}private isAtEnd():boolean{return this.peek().type===TokenType.EOF;}private peek():Token{return this.tokens[this.current];}private peekNext():Token|null{if(this.current+1>=this.tokens.length)return null;return this.tokens[this.current+1];}private previous():Token{return this.tokens[this.current-1];}private consume(type:TokenType,message:string):Token{if(this.check(type))return this.advance();throw new Error(`${message} at line ${this.peek().line}, got ${this.peek().value}`);}}
+export function parse(source:string):ProgramNode{const tokens=tokenize(source);return new Parser(tokens).parse();}
 // ============================================================================
-// RESERVED & CONSTANTS - EXTENDED FOR ROBLOX
+// BYTECODE - Opcodes & Instruction Format
 // ============================================================================
-const RESERVED=new Set(['print','type','tostring','tonumber','pairs','ipairs','next','select','unpack','pcall','xpcall','error','assert','setmetatable','getmetatable','rawget','rawset','rawequal','loadstring','load','dofile','require','collectgarbage','setfenv','getfenv','math','string','table','os','io','coroutine','debug','bit32','bit','utf8','package','game','workspace','script','plugin','wait','spawn','delay','tick','time','elapsedTime','warn','typeof','task','version','settings','Instance','Vector3','Vector2','CFrame','Color3','UDim','UDim2','Enum','Ray','Region3','Rect','BrickColor','TweenInfo','NumberSequence','ColorSequence','NumberRange','PhysicalProperties','Random','Axes','Faces','getgenv','getrenv','getrawmetatable','setrawmetatable','hookfunction','hookmetamethod','newcclosure','islclosure','iscclosure','checkcaller','getinfo','getupvalue','setupvalue','getconstant','setconstant','getconnections','firesignal','fireserver','fireclient','syn','Synapse','Drawing','request','http_request','HttpGet','HttpPost','readfile','writefile','appendfile','isfile','isfolder','makefolder','listfiles','setclipboard','identifyexecutor','getexecutorname','gethiddenproperty','sethiddenproperty','gethui','getinstances','getnilinstances','_G','_VERSION','_ENV','self','nil','true','false','shared']);
-export interface RenameMap{[original:string]:string}
-const STATEMENT_KEYWORDS=new Set([TokenType.LOCAL,TokenType.FUNCTION,TokenType.IF,TokenType.THEN,TokenType.ELSE,TokenType.ELSEIF,TokenType.END,TokenType.DO,TokenType.WHILE,TokenType.FOR,TokenType.REPEAT,TokenType.UNTIL,TokenType.RETURN,TokenType.BREAK,TokenType.GOTO]);
-
-// EXTENDED: More Roblox properties and services to skip
-const SKIP_PROPERTIES=new Set(['new','Create','clone','Clone','Destroy','destroy','Parent','parent','Name','name','Value','value','Text','text','Visible','visible','Enabled','enabled','Position','position','Size','size','Color','color','Transparency','CFrame','Anchored','CanCollide','Character','Humanoid','Health','WalkSpeed','JumpPower','Hit','Target','Mouse','Keyboard','InputBegan','InputEnded','Touched','Changed','ChildAdded','ChildRemoved','AncestryChanged','GetPropertyChangedSignal','Wait','Connect','Disconnect','Once','Fire','Invoke','BindToRenderStep','UnbindFromRenderStep','Heartbeat','Stepped','RenderStepped','GetService','FindFirstChild','FindFirstChildOfClass','FindFirstChildWhichIsA','FindFirstAncestor','FindFirstAncestorOfClass','FindFirstAncestorWhichIsA','WaitForChild','GetChildren','GetDescendants','IsA','IsDescendantOf','IsAncestorOf','GetFullName','SetPrimaryPartCFrame','GetPrimaryPartCFrame','MoveTo','BreakJoints','MakeJoints','GetMass','GetBoundingBox','HttpService','Players','Workspace','ReplicatedStorage','ReplicatedFirst','ServerStorage','ServerScriptService','StarterGui','StarterPack','StarterPlayer','SoundService','TweenService','UserInputService','RunService','Debris','Lighting','Teams','Chat','LocalizationService','MarketplaceService','PolicyService','TextService','PathfindingService','PhysicsService','CollectionService','ContextActionService','GuiService','HapticService','VRService','HttpService','MessagingService','MemoryStoreService','DataStoreService','LocalPlayer','PlayerGui','Backpack','PlayerScripts','leaderstats','UserId','DisplayName','AccountAge','MembershipType','Team','Neutral','RespawnLocation','AutomaticSize','BackgroundColor3','BackgroundTransparency','BorderColor3','BorderMode','BorderSizePixel','ClipsDescendants','Draggable','LayoutOrder','NextSelectionDown','NextSelectionLeft','NextSelectionRight','NextSelectionUp','Rotation','Selectable','SelectionImageObject','SizeConstraint','ZIndex','AutoLocalize','RootLocalizationTable','SelectionGroup','AbsolutePosition','AbsoluteRotation','AbsoluteSize','TextColor3','TextScaled','TextSize','TextStrokeColor3','TextStrokeTransparency','TextTransparency','TextWrapped','TextXAlignment','TextYAlignment','Font','RichText','LineHeight','MaxVisibleGraphemes','ContentText','LocalizedText','Image','ImageColor3','ImageRectOffset','ImageRectSize','ImageTransparency','IsLoaded','ResampleMode','ScaleType','SliceCenter','SliceScale','TileSize','HoverImage','PressedImage','Modal','AutoButtonColor','Selected','Style','fromRGB','fromHSV','fromHex','Lerp','ToHSV','ToHex','angles','fromAxisAngle','fromEulerAnglesXYZ','fromEulerAnglesYXZ','fromMatrix','fromOrientation','lookAt','Orthonormalize','ToAxisAngle','ToEulerAnglesXYZ','ToEulerAnglesYXZ','ToOrientation','GetComponents','Inverse','PointToObjectSpace','PointToWorldSpace','VectorToObjectSpace','VectorToWorldSpace','components','inverse','toAxisAngle','toEulerAnglesXYZ','toEulerAnglesYXZ','toWorldSpace','toObjectSpace','lerp','Cross','Dot','FuzzyEq','Magnitude','Unit','Min','Max','abs','acos','asin','atan','atan2','ceil','clamp','cos','cosh','deg','exp','floor','fmod','frexp','ldexp','log','log10','max','min','modf','noise','pow','rad','random','randomseed','round','sign','sin','sinh','sqrt','tan','tanh','huge','pi','byte','char','dump','find','format','gmatch','gsub','len','lower','match','rep','reverse','sub','upper','split','pack','packsize','unpack','concat','insert','move','remove','sort','clear','create','resume','running','status','wrap','yield','isyieldable','close','clock','date','difftime','execute','exit','getenv','rename','setlocale','time','tmpname','open','close','flush','input','lines','output','popen','read','stderr','stdin','stdout','tmpfile','write','getfenv','setfenv','info','traceback','getinfo','getlocal','setlocal','getmetatable','setmetatable','getupvalue','setupvalue','getuservalue','setuservalue','sethook','gethook','debug','getregistry','upvalueid','upvaluejoin']);
-
-// Service names that should NEVER be encrypted (GetService argument)
-const ROBLOX_SERVICES=new Set(['HttpService','Players','Workspace','ReplicatedStorage','ReplicatedFirst','ServerStorage','ServerScriptService','StarterGui','StarterPack','StarterPlayer','SoundService','TweenService','UserInputService','RunService','Debris','Lighting','Teams','Chat','LocalizationService','MarketplaceService','PolicyService','TextService','PathfindingService','PhysicsService','CollectionService','ContextActionService','GuiService','HapticService','VRService','MessagingService','MemoryStoreService','DataStoreService','TestService','JointsService','InsertService','KeyframeSequenceProvider','AnimationClipProvider','BadgeService','AssetService','GamePassService','PointsService','TeleportService','SocialService','VoiceChatService','AvatarEditorService','ExperienceNotificationService']);
-
+export enum OpCode{LOADNIL=0,LOADBOOL=1,LOADK=2,LOADINT=3,GETGLOBAL=4,SETGLOBAL=5,GETLOCAL=6,SETLOCAL=7,GETUPVAL=8,SETUPVAL=9,GETTABLE=10,SETTABLE=11,NEWTABLE=12,SETLIST=13,ADD=14,SUB=15,MUL=16,DIV=17,MOD=18,POW=19,IDIV=20,UNM=21,NOT=22,LEN=23,CONCAT=24,EQ=25,LT=26,LE=27,JMP=28,JMPIF=29,JMPIFNOT=30,CALL=31,TAILCALL=32,RETURN=33,CLOSURE=34,VARARG=35,SELF=36,FORPREP=37,FORLOOP=38,TFORCALL=39,TFORLOOP=40,CLOSE=41,MOVE=42,TEST=43,TESTSET=44,NOP=45}
+export interface Instruction{op:OpCode;a:number;b:number;c:number;bx?:number;sbx?:number}
+export interface Prototype{code:Instruction[];constants:(null|boolean|number|string)[];protos:Prototype[];numParams:number;isVararg:boolean;maxStack:number;upvalues:{name:string;instack:boolean;idx:number}[];locals:{name:string;startpc:number;endpc:number}[];source:string}
 // ============================================================================
-// PHASE 1: VARIABLE RENAMING
+// BYTECODE COMPILER - Compiles AST to Bytecode
 // ============================================================================
-function isTableKey(tokens:Token[],index:number):boolean{const next=tokens[index+1];if(!next||next.type!==TokenType.ASSIGN)return false;let braceDepth=0;for(let j=index-1;j>=0;j--){const t=tokens[j];if(t.type===TokenType.RBRACE){braceDepth++;continue;}if(t.type===TokenType.LBRACE){if(braceDepth===0)return true;braceDepth--;continue;}if(braceDepth>0)continue;if(t.type===TokenType.SEMICOLON)return false;if(STATEMENT_KEYWORDS.has(t.type))return false;}return false;}
-function analyzeIdentifiers(tokens:Token[]):Set<string>{const localVars=new Set<string>();for(let i=0;i<tokens.length;i++){const t=tokens[i];if(t.type!==TokenType.IDENTIFIER)continue;if(RESERVED.has(t.value))continue;const prev=tokens[i-1];const prev2=tokens[i-2];if(prev&&(prev.type===TokenType.DOT||prev.type===TokenType.COLON))continue;if(isTableKey(tokens,i))continue;let isLocal=false;if(prev&&prev.type===TokenType.LOCAL)isLocal=true;if(!isLocal&&prev&&prev.type===TokenType.COMMA){for(let j=i-1;j>=0;j--){const tk=tokens[j];if(tk.type===TokenType.LOCAL){isLocal=true;break;}if(tk.type===TokenType.ASSIGN||tk.type===TokenType.IN||STATEMENT_KEYWORDS.has(tk.type))break;}}if(!isLocal&&prev&&prev.type===TokenType.FUNCTION){if(prev2&&prev2.type===TokenType.LOCAL)isLocal=true;}if(!isLocal){let parenDepth=0;for(let j=i-1;j>=0;j--){const tk=tokens[j];if(tk.type===TokenType.RPAREN)parenDepth++;else if(tk.type===TokenType.LPAREN){parenDepth--;if(parenDepth<0){for(let k=j-1;k>=0;k--){if(tokens[k].type===TokenType.FUNCTION){isLocal=true;break;}if(tokens[k].type!==TokenType.IDENTIFIER)break;}break;}}else if(STATEMENT_KEYWORDS.has(tk.type))break;}}if(!isLocal){for(let j=i-1;j>=0;j--){const tk=tokens[j];if(tk.type===TokenType.FOR){isLocal=true;break;}if(tk.type===TokenType.DO||STATEMENT_KEYWORDS.has(tk.type))break;}}if(isLocal)localVars.add(t.value);}return localVars;}
-export function createRenameMap(tokens:Token[],nameGen:NameGenerator):RenameMap{const map:RenameMap={};const localVars=analyzeIdentifiers(tokens);for(const name of localVars)map[name]=nameGen.generate();return map;}
-export function applyRenameMap(tokens:Token[],map:RenameMap):Token[]{const result:Token[]=[];for(let i=0;i<tokens.length;i++){const t=tokens[i];if(t.type!==TokenType.IDENTIFIER||!map[t.value]){result.push(t);continue;}const prev=tokens[i-1];if(prev&&(prev.type===TokenType.DOT||prev.type===TokenType.COLON)){result.push(t);continue;}if(isTableKey(tokens,i)){result.push(t);continue;}result.push({...t,value:map[t.value],literal:map[t.value]});}return result;}
-
+interface Local{name:string;depth:number;startpc:number}
+interface Upvalue{name:string;isLocal:boolean;index:number}
+interface LoopInfo{start:number;breaks:number[];depth:number}
+class Compiler{private proto:Prototype;private locals:Local[]=[];private upvalues:Upvalue[]=[];private scopeDepth=0;private loopStack:LoopInfo[]=[];private parent:Compiler|null;constructor(parent:Compiler|null=null,source:string=''){this.parent=parent;this.proto={code:[],constants:[],protos:[],numParams:0,isVararg:false,maxStack:2,upvalues:[],locals:[],source};}compile(ast:ProgramNode):Prototype{for(const stmt of ast.body){this.compileStatement(stmt);}this.emit(OpCode.RETURN,0,1,0);this.proto.maxStack=Math.max(this.proto.maxStack,this.locals.length+10);return this.proto;}private emit(op:OpCode,a:number,b:number,c:number):number{this.proto.code.push({op,a,b,c});return this.proto.code.length-1;}private emitABx(op:OpCode,a:number,bx:number):number{this.proto.code.push({op,a,b:0,c:0,bx});return this.proto.code.length-1;}private emitAsBx(op:OpCode,a:number,sbx:number):number{this.proto.code.push({op,a,b:0,c:0,sbx});return this.proto.code.length-1;}private addConstant(value:null|boolean|number|string):number{const idx=this.proto.constants.indexOf(value);if(idx!==-1)return idx;this.proto.constants.push(value);return this.proto.constants.length-1;}private addLocal(name:string):number{const local:Local={name,depth:this.scopeDepth,startpc:this.proto.code.length};this.locals.push(local);return this.locals.length-1;}private resolveLocal(name:string):number{for(let i=this.locals.length-1;i>=0;i--){if(this.locals[i].name===name)return i;}return-1;}private resolveUpvalue(name:string):number{for(let i=0;i<this.upvalues.length;i++){if(this.upvalues[i].name===name)return i;}if(this.parent){const local=this.parent.resolveLocal(name);if(local!==-1){return this.addUpvalue(name,true,local);}const upval=this.parent.resolveUpvalue(name);if(upval!==-1){return this.addUpvalue(name,false,upval);}}return-1;}private addUpvalue(name:string,isLocal:boolean,index:number):number{for(let i=0;i<this.upvalues.length;i++){const uv=this.upvalues[i];if(uv.index===index&&uv.isLocal===isLocal)return i;}this.upvalues.push({name,isLocal,index});this.proto.upvalues.push({name,instack:isLocal,idx:index});return this.upvalues.length-1;}private beginScope():void{this.scopeDepth++;}private endScope():void{this.scopeDepth--;while(this.locals.length>0&&this.locals[this.locals.length-1].depth>this.scopeDepth){this.locals.pop();}}private allocReg():number{const reg=this.locals.length;this.proto.maxStack=Math.max(this.proto.maxStack,reg+1);return reg;}private freeReg(count:number=1):void{}private compileStatement(stmt:StatementNode):void{switch(stmt.type){case'LocalDeclaration':this.compileLocalDeclaration(stmt);break;case'Assignment':this.compileAssignment(stmt);break;case'FunctionDeclaration':this.compileFunctionDeclaration(stmt);break;case'LocalFunctionDeclaration':this.compileLocalFunctionDeclaration(stmt);break;case'IfStatement':this.compileIfStatement(stmt);break;case'WhileStatement':this.compileWhileStatement(stmt);break;case'RepeatStatement':this.compileRepeatStatement(stmt);break;case'ForNumericStatement':this.compileForNumeric(stmt);break;case'ForGenericStatement':this.compileForGeneric(stmt);break;case'ReturnStatement':this.compileReturnStatement(stmt);break;case'BreakStatement':this.compileBreakStatement();break;case'DoBlock':this.compileDoBlock(stmt);break;case'CallStatement':this.compileCallStatement(stmt);break;case'MethodCallStatement':this.compileMethodCallStatement(stmt);break;}}private compileLocalDeclaration(stmt:LocalDeclaration):void{const baseReg=this.locals.length;for(let i=0;i<stmt.names.length;i++){this.addLocal(stmt.names[i].name);}if(stmt.values.length===0){for(let i=0;i<stmt.names.length;i++){this.emit(OpCode.LOADNIL,baseReg+i,0,0);}}else{for(let i=0;i<stmt.values.length;i++){const reg=baseReg+i;if(i<stmt.names.length){this.compileExpression(stmt.values[i],reg,1);}else{this.compileExpression(stmt.values[i],reg,0);}}for(let i=stmt.values.length;i<stmt.names.length;i++){this.emit(OpCode.LOADNIL,baseReg+i,0,0);}}}private compileAssignment(stmt:Assignment):void{const tempBase=this.allocReg();for(let i=0;i<stmt.values.length;i++){this.compileExpression(stmt.values[i],tempBase+i,1);}for(let i=0;i<stmt.targets.length;i++){const target=stmt.targets[i];const valueReg=tempBase+Math.min(i,stmt.values.length-1);this.compileAssignTarget(target,valueReg);}}private compileAssignTarget(target:ExpressionNode,valueReg:number):void{if(target.type==='Identifier'){const local=this.resolveLocal(target.name);if(local!==-1){this.emit(OpCode.MOVE,local,valueReg,0);}else{const upval=this.resolveUpvalue(target.name);if(upval!==-1){this.emit(OpCode.SETUPVAL,valueReg,upval,0);}else{const nameK=this.addConstant(target.name);this.emitABx(OpCode.SETGLOBAL,valueReg,nameK);}}}else if(target.type==='IndexExpression'){const tableReg=this.allocReg();const keyReg=this.allocReg();this.compileExpression(target.object,tableReg,1);this.compileExpression(target.index,keyReg,1);this.emit(OpCode.SETTABLE,tableReg,keyReg,valueReg);}else if(target.type==='MemberExpression'){const tableReg=this.allocReg();this.compileExpression(target.object,tableReg,1);const keyK=this.addConstant(target.property);this.emit(OpCode.SETTABLE,tableReg,256+keyK,valueReg);}}private compileFunctionDeclaration(stmt:FunctionDeclaration):void{const funcReg=this.allocReg();this.compileFunction(stmt.params,stmt.vararg,stmt.body,funcReg);this.compileAssignTarget(stmt.name,funcReg);}private compileLocalFunctionDeclaration(stmt:LocalFunctionDeclaration):void{const reg=this.addLocal(stmt.name.name);this.compileFunction(stmt.params,stmt.vararg,stmt.body,reg);}private compileFunction(params:Identifier[],vararg:boolean,body:StatementNode[],reg:number):void{const childCompiler=new Compiler(this,this.proto.source);childCompiler.proto.numParams=params.length;childCompiler.proto.isVararg=vararg;childCompiler.beginScope();for(const param of params){childCompiler.addLocal(param.name);}for(const stmt of body){childCompiler.compileStatement(stmt);}childCompiler.emit(OpCode.RETURN,0,1,0);childCompiler.endScope();const protoIdx=this.proto.protos.length;this.proto.protos.push(childCompiler.proto);this.emitABx(OpCode.CLOSURE,reg,protoIdx);for(const uv of childCompiler.upvalues){this.emit(uv.isLocal?OpCode.MOVE:OpCode.GETUPVAL,0,uv.index,0);}}private compileIfStatement(stmt:IfStatement):void{const endJumps:number[]=[];this.compileExpression(stmt.condition,this.allocReg(),1);const falseJump=this.emitAsBx(OpCode.JMPIFNOT,this.locals.length-1,0);this.beginScope();for(const s of stmt.consequent)this.compileStatement(s);this.endScope();endJumps.push(this.emitAsBx(OpCode.JMP,0,0));this.proto.code[falseJump].sbx=this.proto.code.length-falseJump-1;for(const alt of stmt.alternatives){this.compileExpression(alt.condition,this.allocReg(),1);const altFalseJump=this.emitAsBx(OpCode.JMPIFNOT,this.locals.length-1,0);this.beginScope();for(const s of alt.body)this.compileStatement(s);this.endScope();endJumps.push(this.emitAsBx(OpCode.JMP,0,0));this.proto.code[altFalseJump].sbx=this.proto.code.length-altFalseJump-1;}if(stmt.elseBody){this.beginScope();for(const s of stmt.elseBody)this.compileStatement(s);this.endScope();}for(const jmp of endJumps){this.proto.code[jmp].sbx=this.proto.code.length-jmp-1;}}private compileWhileStatement(stmt:WhileStatement):void{const loopStart=this.proto.code.length;this.loopStack.push({start:loopStart,breaks:[],depth:this.scopeDepth});const condReg=this.allocReg();this.compileExpression(stmt.condition,condReg,1);const exitJump=this.emitAsBx(OpCode.JMPIFNOT,condReg,0);this.beginScope();for(const s of stmt.body)this.compileStatement(s);this.endScope();this.emitAsBx(OpCode.JMP,0,loopStart-this.proto.code.length-1);this.proto.code[exitJump].sbx=this.proto.code.length-exitJump-1;const loop=this.loopStack.pop()!;for(const brk of loop.breaks){this.proto.code[brk].sbx=this.proto.code.length-brk-1;}}private compileRepeatStatement(stmt:RepeatStatement):void{const loopStart=this.proto.code.length;this.loopStack.push({start:loopStart,breaks:[],depth:this.scopeDepth});this.beginScope();for(const s of stmt.body)this.compileStatement(s);const condReg=this.allocReg();this.compileExpression(stmt.condition,condReg,1);this.emitAsBx(OpCode.JMPIFNOT,condReg,loopStart-this.proto.code.length-1);this.endScope();const loop=this.loopStack.pop()!;for(const brk of loop.breaks){this.proto.code[brk].sbx=this.proto.code.length-brk-1;}}private compileForNumeric(stmt:ForNumericStatement):void{this.beginScope();const baseReg=this.locals.length;this.addLocal('(for index)');this.addLocal('(for limit)');this.addLocal('(for step)');this.addLocal(stmt.variable.name);this.compileExpression(stmt.start,baseReg,1);this.compileExpression(stmt.end,baseReg+1,1);if(stmt.step){this.compileExpression(stmt.step,baseReg+2,1);}else{this.emit(OpCode.LOADINT,baseReg+2,1,0);}const prepJump=this.emitAsBx(OpCode.FORPREP,baseReg,0);const loopStart=this.proto.code.length;this.loopStack.push({start:loopStart,breaks:[],depth:this.scopeDepth});for(const s of stmt.body)this.compileStatement(s);this.proto.code[prepJump].sbx=this.proto.code.length-prepJump-1;this.emitAsBx(OpCode.FORLOOP,baseReg,loopStart-this.proto.code.length-1);const loop=this.loopStack.pop()!;for(const brk of loop.breaks){this.proto.code[brk].sbx=this.proto.code.length-brk-1;}this.endScope();}private compileForGeneric(stmt:ForGenericStatement):void{this.beginScope();const baseReg=this.locals.length;this.addLocal('(for generator)');this.addLocal('(for state)');this.addLocal('(for control)');for(const v of stmt.variables){this.addLocal(v.name);}for(let i=0;i<stmt.iterators.length&&i<3;i++){this.compileExpression(stmt.iterators[i],baseReg+i,1);}const prepJump=this.emitAsBx(OpCode.JMP,0,0);const loopStart=this.proto.code.length;this.loopStack.push({start:loopStart,breaks:[],depth:this.scopeDepth});for(const s of stmt.body)this.compileStatement(s);this.proto.code[prepJump].sbx=this.proto.code.length-prepJump-1;this.emit(OpCode.TFORCALL,baseReg,0,stmt.variables.length);this.emitAsBx(OpCode.TFORLOOP,baseReg+2,loopStart-this.proto.code.length-1);const loop=this.loopStack.pop()!;for(const brk of loop.breaks){this.proto.code[brk].sbx=this.proto.code.length-brk-1;}this.endScope();}private compileReturnStatement(stmt:ReturnStatement):void{if(stmt.values.length===0){this.emit(OpCode.RETURN,0,1,0);}else{const baseReg=this.allocReg();for(let i=0;i<stmt.values.length;i++){this.compileExpression(stmt.values[i],baseReg+i,1);}this.emit(OpCode.RETURN,baseReg,stmt.values.length+1,0);}}private compileBreakStatement():void{if(this.loopStack.length===0){throw new Error('Break outside loop');}const loop=this.loopStack[this.loopStack.length-1];loop.breaks.push(this.emitAsBx(OpCode.JMP,0,0));}private compileDoBlock(stmt:DoBlock):void{this.beginScope();for(const s of stmt.body)this.compileStatement(s);this.endScope();}private compileCallStatement(stmt:CallStatement):void{const reg=this.allocReg();this.compileCall(stmt.expression,reg,1);}private compileMethodCallStatement(stmt:MethodCallStatement):void{const reg=this.allocReg();this.compileMethodCall(stmt.expression,reg,1);}private compileExpression(expr:ExpressionNode,reg:number,want:number):void{switch(expr.type){case'NilLiteral':this.emit(OpCode.LOADNIL,reg,0,0);break;case'BooleanLiteral':this.emit(OpCode.LOADBOOL,reg,expr.value?1:0,0);break;case'NumberLiteral':if(Number.isInteger(expr.value)&&expr.value>=-131072&&expr.value<=131071){this.emit(OpCode.LOADINT,reg,expr.value,0);}else{const k=this.addConstant(expr.value);this.emitABx(OpCode.LOADK,reg,k);}break;case'StringLiteral':{const k=this.addConstant(expr.value);this.emitABx(OpCode.LOADK,reg,k);break;}case'Identifier':this.compileIdentifier(expr,reg);break;case'BinaryExpression':this.compileBinaryExpression(expr,reg);break;case'UnaryExpression':this.compileUnaryExpression(expr,reg);break;case'TableConstructor':this.compileTableConstructor(expr,reg);break;case'FunctionExpression':this.compileFunction(expr.params,expr.vararg,expr.body,reg);break;case'CallExpression':this.compileCall(expr,reg,want);break;case'MethodCallExpression':this.compileMethodCall(expr,reg,want);break;case'IndexExpression':this.compileIndexExpression(expr,reg);break;case'MemberExpression':this.compileMemberExpression(expr,reg);break;case'ParenExpression':this.compileExpression(expr.expression,reg,1);break;case'VarargLiteral':this.emit(OpCode.VARARG,reg,want+1,0);break;}}private compileIdentifier(expr:Identifier,reg:number):void{const local=this.resolveLocal(expr.name);if(local!==-1){if(local!==reg)this.emit(OpCode.MOVE,reg,local,0);}else{const upval=this.resolveUpvalue(expr.name);if(upval!==-1){this.emit(OpCode.GETUPVAL,reg,upval,0);}else{const k=this.addConstant(expr.name);this.emitABx(OpCode.GETGLOBAL,reg,k);}}}private compileBinaryExpression(expr:BinaryExpression,reg:number):void{if(expr.operator==='and'){this.compileExpression(expr.left,reg,1);const jump=this.emitAsBx(OpCode.JMPIFNOT,reg,0);this.compileExpression(expr.right,reg,1);this.proto.code[jump].sbx=this.proto.code.length-jump-1;return;}if(expr.operator==='or'){this.compileExpression(expr.left,reg,1);const jump=this.emitAsBx(OpCode.JMPIF,reg,0);this.compileExpression(expr.right,reg,1);this.proto.code[jump].sbx=this.proto.code.length-jump-1;return;}const leftReg=reg;const rightReg=this.allocReg();this.compileExpression(expr.left,leftReg,1);this.compileExpression(expr.right,rightReg,1);switch(expr.operator){case'+':this.emit(OpCode.ADD,reg,leftReg,rightReg);break;case'-':this.emit(OpCode.SUB,reg,leftReg,rightReg);break;case'*':this.emit(OpCode.MUL,reg,leftReg,rightReg);break;case'/':this.emit(OpCode.DIV,reg,leftReg,rightReg);break;case'%':this.emit(OpCode.MOD,reg,leftReg,rightReg);break;case'^':this.emit(OpCode.POW,reg,leftReg,rightReg);break;case'//':this.emit(OpCode.IDIV,reg,leftReg,rightReg);break;case'..':this.emit(OpCode.CONCAT,reg,leftReg,rightReg);break;case'==':this.emit(OpCode.EQ,1,leftReg,rightReg);this.emitAsBx(OpCode.JMP,0,1);this.emit(OpCode.LOADBOOL,reg,0,1);this.emit(OpCode.LOADBOOL,reg,1,0);break;case'~=':this.emit(OpCode.EQ,0,leftReg,rightReg);this.emitAsBx(OpCode.JMP,0,1);this.emit(OpCode.LOADBOOL,reg,0,1);this.emit(OpCode.LOADBOOL,reg,1,0);break;case'<':this.emit(OpCode.LT,1,leftReg,rightReg);this.emitAsBx(OpCode.JMP,0,1);this.emit(OpCode.LOADBOOL,reg,0,1);this.emit(OpCode.LOADBOOL,reg,1,0);break;case'>':this.emit(OpCode.LT,1,rightReg,leftReg);this.emitAsBx(OpCode.JMP,0,1);this.emit(OpCode.LOADBOOL,reg,0,1);this.emit(OpCode.LOADBOOL,reg,1,0);break;case'<=':this.emit(OpCode.LE,1,leftReg,rightReg);this.emitAsBx(OpCode.JMP,0,1);this.emit(OpCode.LOADBOOL,reg,0,1);this.emit(OpCode.LOADBOOL,reg,1,0);break;case'>=':this.emit(OpCode.LE,1,rightReg,leftReg);this.emitAsBx(OpCode.JMP,0,1);this.emit(OpCode.LOADBOOL,reg,0,1);this.emit(OpCode.LOADBOOL,reg,1,0);break;}}private compileUnaryExpression(expr:UnaryExpression,reg:number):void{this.compileExpression(expr.argument,reg,1);switch(expr.operator){case'-':this.emit(OpCode.UNM,reg,reg,0);break;case'not':this.emit(OpCode.NOT,reg,reg,0);break;case'#':this.emit(OpCode.LEN,reg,reg,0);break;}}private compileTableConstructor(expr:TableConstructor,reg:number):void{this.emit(OpCode.NEWTABLE,reg,0,0);let arrayIdx=1;for(const field of expr.fields){if(field.type==='TableField'){const valueReg=this.allocReg();this.compileExpression(field.value,valueReg,1);this.emit(OpCode.LOADINT,valueReg+1,arrayIdx,0);this.emit(OpCode.SETTABLE,reg,valueReg+1,valueReg);arrayIdx++;}else{const keyReg=this.allocReg();const valueReg=this.allocReg();if(field.key.type==='StringLiteral'){const k=this.addConstant(field.key.value);this.emit(OpCode.SETTABLE,reg,256+k,valueReg);this.compileExpression(field.value,valueReg,1);this.emit(OpCode.SETTABLE,reg,256+k,valueReg);}else{this.compileExpression(field.key,keyReg,1);this.compileExpression(field.value,valueReg,1);this.emit(OpCode.SETTABLE,reg,keyReg,valueReg);}}}}private compileCall(expr:CallExpression,reg:number,want:number):void{this.compileExpression(expr.callee,reg,1);for(let i=0;i<expr.arguments.length;i++){this.compileExpression(expr.arguments[i],reg+1+i,1);}this.emit(OpCode.CALL,reg,expr.arguments.length+1,want+1);}private compileMethodCall(expr:MethodCallExpression,reg:number,want:number):void{this.compileExpression(expr.object,reg,1);const methodK=this.addConstant(expr.method);this.emit(OpCode.SELF,reg,reg,256+methodK);for(let i=0;i<expr.arguments.length;i++){this.compileExpression(expr.arguments[i],reg+2+i,1);}this.emit(OpCode.CALL,reg,expr.arguments.length+2,want+1);}private compileIndexExpression(expr:IndexExpression,reg:number):void{this.compileExpression(expr.object,reg,1);const keyReg=this.allocReg();this.compileExpression(expr.index,keyReg,1);this.emit(OpCode.GETTABLE,reg,reg,keyReg);}private compileMemberExpression(expr:MemberExpression,reg:number):void{this.compileExpression(expr.object,reg,1);const k=this.addConstant(expr.property);this.emit(OpCode.GETTABLE,reg,reg,256+k);}}
+export function compile(source:string):Prototype{const ast=parse(source);return new Compiler(null,source).compile(ast);}
 // ============================================================================
-// PHASE 2: STRING ENCRYPTION - FIXED!
+// VM GENERATOR - Generates Lua VM Code
 // ============================================================================
-function isGetServiceArg(tokens:Token[],index:number):boolean{for(let j=index-1;j>=Math.max(0,index-5);j--){const t=tokens[j];if(t.type===TokenType.IDENTIFIER&&t.value==='GetService')return true;if(t.type===TokenType.SEMICOLON||t.type===TokenType.ASSIGN)break;}return false;}
-
-function shouldSkipString(tokens:Token[],index:number,literal:string):boolean{
-    // Skip service names
-    if(ROBLOX_SERVICES.has(literal))return true;
-    // Skip if it's a GetService argument
-    if(isGetServiceArg(tokens,index))return true;
-    // Skip very short strings
-    if(literal.length<=1)return true;
-    // Skip strings that look like property names being accessed
-    const prev=tokens[index-1];
-    if(prev&&prev.type===TokenType.LBRACKET){
-        const prev2=tokens[index-2];
-        if(prev2&&(prev2.type===TokenType.IDENTIFIER||prev2.type===TokenType.RBRACKET||prev2.type===TokenType.RPAREN)){
-            if(SKIP_PROPERTIES.has(literal))return true;
-        }
-    }
-    return false;
-}
-
-export interface StringEncryptionResult{encryptedStrings:Map<string,{encrypted:string;key:number}>;decryptorName:string;decryptorCode:string;xorKey:number}
-export function encryptStrings(tokens:Token[],nameGen:NameGenerator):{tokens:Token[];encryption:StringEncryptionResult}{
-    const encryptedStrings=new Map<string,{encrypted:string;key:number}>();
-    const decryptorName=nameGen.generate();
-    const globalKey=Math.floor(Math.random()*200)+50;
-    const result:Token[]=[];
-    for(let i=0;i<tokens.length;i++){
-        const t=tokens[i];
-        if(t.type===TokenType.STRING&&typeof t.literal==='string'&&t.literal.length>0){
-            const original=t.literal;
-            // Check if we should skip this string
-            if(shouldSkipString(tokens,i,original)){
-                result.push(t);
-                continue;
-            }
-            const encrypted=StrEnc.enc(original,globalKey);
-            encryptedStrings.set(original,{encrypted,key:globalKey});
-            result.push({type:TokenType.IDENTIFIER,value:decryptorName,line:t.line,column:t.column});
-            result.push({type:TokenType.LPAREN,value:'(',line:t.line,column:t.column});
-            result.push({type:TokenType.STRING,value:`"${encrypted}"`,literal:encrypted,line:t.line,column:t.column});
-            result.push({type:TokenType.COMMA,value:',',line:t.line,column:t.column});
-            result.push({type:TokenType.NUMBER,value:NumFmt.fmt(globalKey),literal:globalKey,line:t.line,column:t.column});
-            result.push({type:TokenType.RPAREN,value:')',line:t.line,column:t.column});
-        }else{
-            result.push(t);
-        }
-    }
-    // FIXED: Simpler, more reliable decryptor without bit32 dependency issues
-    const decryptorCode=`local ${decryptorName}=(function()local function x(a,b)local r,p=0,1;while a>0 or b>0 do local ra,rb=a%2,b%2;if ra~=rb then r=r+p end;a,b,p=(a-ra)/2,(b-rb)/2,p*2 end;return r end;return function(s,k)local o={};for i=1,#s do o[i]=string.char(x(string.byte(s,i),k))end;return table.concat(o)end end)()`;
-    return{tokens:result,encryption:{encryptedStrings,decryptorName,decryptorCode,xorKey:globalKey}};
-}
-
-// ============================================================================
-// PHASE 3: PROPERTY ACCESS OBFUSCATION - FIXED FOR ROBLOX
-// ============================================================================
-export function obfuscatePropertyAccess(tokens:Token[],decryptorName:string,xorKey:number):{tokens:Token[];propertiesObfuscated:number}{
-    const result:Token[]=[];
-    let count=0;
-    for(let i=0;i<tokens.length;i++){
-        const t=tokens[i];
-        const next=tokens[i+1];
-        if(t.type===TokenType.DOT&&next?.type===TokenType.IDENTIFIER){
-            const propName=next.value;
-            // Skip if property is in skip list or is a service/important method
-            if(propName.length<=2||SKIP_PROPERTIES.has(propName)||ROBLOX_SERVICES.has(propName)){
-                result.push(t);
-                continue;
-            }
-            const encrypted=StrEnc.enc(propName,xorKey);
-            result.push({type:TokenType.LBRACKET,value:'[',line:t.line,column:t.column});
-            result.push({type:TokenType.IDENTIFIER,value:decryptorName,line:t.line,column:t.column});
-            result.push({type:TokenType.LPAREN,value:'(',line:t.line,column:t.column});
-            result.push({type:TokenType.STRING,value:`"${encrypted}"`,literal:encrypted,line:t.line,column:t.column});
-            result.push({type:TokenType.COMMA,value:',',line:t.line,column:t.column});
-            result.push({type:TokenType.NUMBER,value:NumFmt.fmt(xorKey),literal:xorKey,line:t.line,column:t.column});
-            result.push({type:TokenType.RPAREN,value:')',line:t.line,column:t.column});
-            result.push({type:TokenType.RBRACKET,value:']',line:t.line,column:t.column});
-            i++;count++;
-        }else{
-            result.push(t);
-        }
-    }
-    return{tokens:result,propertiesObfuscated:count};
-}
-
-// ============================================================================
-// PHASE 4: TABLE KEYS OBFUSCATION
-// ============================================================================
-export function obfuscateTableKeys(tokens:Token[],decryptorName:string,xorKey:number):{tokens:Token[];keysObfuscated:number}{
-    const result:Token[]=[];
-    let count=0;
-    for(let i=0;i<tokens.length;i++){
-        const t=tokens[i];
-        if(t.type===TokenType.IDENTIFIER&&isTableKey(tokens,i)&&t.value.length>2&&!SKIP_PROPERTIES.has(t.value)){
-            const encrypted=StrEnc.enc(t.value,xorKey);
-            result.push({type:TokenType.LBRACKET,value:'[',line:t.line,column:t.column});
-            result.push({type:TokenType.IDENTIFIER,value:decryptorName,line:t.line,column:t.column});
-            result.push({type:TokenType.LPAREN,value:'(',line:t.line,column:t.column});
-            result.push({type:TokenType.STRING,value:`"${encrypted}"`,literal:encrypted,line:t.line,column:t.column});
-            result.push({type:TokenType.COMMA,value:',',line:t.line,column:t.column});
-            result.push({type:TokenType.NUMBER,value:NumFmt.fmt(xorKey),literal:xorKey,line:t.line,column:t.column});
-            result.push({type:TokenType.RPAREN,value:')',line:t.line,column:t.column});
-            result.push({type:TokenType.RBRACKET,value:']',line:t.line,column:t.column});
-            count++;
-        }else{
-            result.push(t);
-        }
-    }
-    return{tokens:result,keysObfuscated:count};
-}
-
-// ============================================================================
-// PHASE 5: NUMBER OBFUSCATION
-// ============================================================================
-export function obfuscateNumbers(tokens:Token[]):{tokens:Token[];numbersObfuscated:number}{
-    const result:Token[]=[];
-    let numbersObfuscated=0;
-    for(let i=0;i<tokens.length;i++){
-        const t=tokens[i];
-        if(t.type===TokenType.NUMBER&&typeof t.literal==='number'){
-            const num=t.literal;
-            let inForLoop=false;
-            for(let j=i-1;j>=Math.max(0,i-15);j--){
-                if(tokens[j].type===TokenType.FOR){inForLoop=true;break;}
-                if(tokens[j].type===TokenType.DO)break;
-            }
-            if(inForLoop){result.push(t);continue;}
-            const prev=tokens[i-1];
-            if(prev?.type===TokenType.LBRACKET&&num>=1&&num<=10&&Number.isInteger(num)){result.push(t);continue;}
-            result.push({...t,value:NumFmt.fmtSafe(num)});
-            numbersObfuscated++;
-        }else{
-            result.push(t);
-        }
-    }
-    return{tokens:result,numbersObfuscated};
-}
-
-// ============================================================================
-// PHASE 6: OPAQUE PREDICATES & DEAD CODE
-// ============================================================================
-class OpaquePredicateGenerator{private nameGen:NameGenerator;constructor(ng:NameGenerator){this.nameGen=ng;}generateTruePredicate():{condition:string;setup:string}{const v=this.nameGen.generate();const n=Math.floor(Math.random()*100)+1;return{setup:`local ${v}=${NumFmt.fmt(n)}`,condition:`(${v}*${v}>=${NumFmt.fmt(0)})`};}generateFalsePredicate():{condition:string;setup:string}{const v=this.nameGen.generate();const n=Math.floor(Math.random()*100)+1;return{setup:`local ${v}=${NumFmt.fmt(n)}`,condition:`(${v}<${NumFmt.fmt(0)} and ${v}>${NumFmt.fmt(0)})`};}}
-class DeadCodeGenerator{private nameGen:NameGenerator;constructor(ng:NameGenerator){this.nameGen=ng;}generateDeadCode():string{const v=this.nameGen.generate();return`local ${v}=${NumFmt.fmt(Math.floor(Math.random()*1000))}`;}generateDeadBlock():string{const lines:string[]=[];for(let i=0;i<2;i++)lines.push(this.generateDeadCode());return lines.join(';');}}
-export function injectOpaquePredicates(tokens:Token[],nameGen:NameGenerator,config:{insertionRate?:number}={}):{tokens:Token[];predicatesInserted:number;deadCodeInserted:number}{const cfg={insertionRate:config.insertionRate??0.15};const opaqueGen=new OpaquePredicateGenerator(nameGen);const deadGen=new DeadCodeGenerator(nameGen);const result:Token[]=[];let predicatesInserted=0;let deadCodeInserted=0;const insertionPoints:number[]=[];for(let i=0;i<tokens.length;i++){const t=tokens[i];if(t.type===TokenType.THEN||t.type===TokenType.DO||t.type===TokenType.ELSE){if(Math.random()<cfg.insertionRate)insertionPoints.push(i);}}for(let i=0;i<tokens.length;i++){const t=tokens[i];result.push(t);if(insertionPoints.includes(i)){if(Math.random()<0.5){const falsePred=opaqueGen.generateFalsePredicate();const deadCode=deadGen.generateDeadBlock();const injection=`${falsePred.setup};if ${falsePred.condition} then ${deadCode} end`;const injTokens=tokenize(injection);injTokens.pop();result.push(...injTokens);predicatesInserted++;deadCodeInserted++;}else{const truePred=opaqueGen.generateTruePredicate();const injTokens=tokenize(truePred.setup);injTokens.pop();result.push(...injTokens);predicatesInserted++;}}}return{tokens:result,predicatesInserted,deadCodeInserted};}
-
-// ============================================================================
-// PHASE 7: CONTROL FLOW FLATTENING - IMPROVED
-// ============================================================================
-interface CFBlock{id:number;tokens:Token[];nextState:number|null}
-class ControlFlowFlattener{private stateVarName:string;private blocks:CFBlock[]=[];constructor(nameGen:NameGenerator){this.stateVarName=nameGen.generate();}private shuffleArray<T>(array:T[]):T[]{const result=[...array];for(let i=result.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[result[i],result[j]]=[result[j],result[i]];}return result;}flattenFunction(bodyTokens:Token[]):Token[]{this.blocks=[];const segments=this.splitIntoSegments(bodyTokens);if(segments.length<2)return bodyTokens;let stateId=1;for(const seg of segments){this.blocks.push({id:stateId,tokens:seg,nextState:stateId<segments.length?stateId+1:0});stateId++;}return this.generateStateMachine();}private splitIntoSegments(tokens:Token[]):Token[][]{const segments:Token[][]=[];let current:Token[]=[];let depth=0;let parenDepth=0;let bracketDepth=0;let braceDepth=0;for(let i=0;i<tokens.length;i++){const t=tokens[i];if(t.type===TokenType.IF||t.type===TokenType.WHILE||t.type===TokenType.FOR||t.type===TokenType.FUNCTION||t.type===TokenType.REPEAT||t.type===TokenType.DO)depth++;if(t.type===TokenType.END||t.type===TokenType.UNTIL)depth--;if(t.type===TokenType.LPAREN)parenDepth++;if(t.type===TokenType.RPAREN)parenDepth--;if(t.type===TokenType.LBRACKET)bracketDepth++;if(t.type===TokenType.RBRACKET)bracketDepth--;if(t.type===TokenType.LBRACE)braceDepth++;if(t.type===TokenType.RBRACE)braceDepth--;current.push(t);const allClosed=depth===0&&parenDepth===0&&bracketDepth===0&&braceDepth===0;const canSplit=t.type===TokenType.END||i===tokens.length-1||(tokens[i+1]&&tokens[i+1].type===TokenType.LOCAL);if(allClosed&&current.length>3&&canSplit){segments.push(current);current=[];}}if(current.length>0)segments.push(current);return segments;}private generateStateMachine():Token[]{const result:Token[]=[];const shuffled=this.shuffleArray(this.blocks);const init=this.blocks.length>0?this.blocks[0].id:0;result.push(...tokenize(`local ${this.stateVarName}=${NumFmt.fmt(init)}`).slice(0,-1));result.push(...tokenize(`while ${this.stateVarName}~=${NumFmt.fmt(0)} do `).slice(0,-1));for(let i=0;i<shuffled.length;i++){const block=shuffled[i];const kw=i===0?'if':'elseif';result.push(...tokenize(`${kw} ${this.stateVarName}==${NumFmt.fmt(block.id)} then `).slice(0,-1));result.push(...block.tokens);result.push(...tokenize(`;${this.stateVarName}=${NumFmt.fmt(block.nextState??0)};`).slice(0,-1));}result.push(...tokenize(` end end`).slice(0,-1));return result;}}
-export function flattenControlFlow(tokens:Token[],nameGen:NameGenerator,config:{flattenRate?:number;minStatements?:number}={}):{tokens:Token[];functionsFlattened:number}{const cfg={flattenRate:config.flattenRate??0.3,minStatements:config.minStatements??3};const result:Token[]=[];let functionsFlattened=0;let i=0;while(i<tokens.length){const t=tokens[i];if(t.type===TokenType.FUNCTION){result.push(t);i++;while(i<tokens.length&&tokens[i].type!==TokenType.LPAREN){result.push(tokens[i]);i++;}if(i<tokens.length){result.push(tokens[i]);i++;}let parenDepth=1;while(i<tokens.length&&parenDepth>0){if(tokens[i].type===TokenType.LPAREN)parenDepth++;if(tokens[i].type===TokenType.RPAREN)parenDepth--;result.push(tokens[i]);i++;}const bodyTokens:Token[]=[];let depth=1;while(i<tokens.length&&depth>0){const tk=tokens[i];if(tk.type===TokenType.FUNCTION||tk.type===TokenType.IF||tk.type===TokenType.WHILE||tk.type===TokenType.FOR||tk.type===TokenType.REPEAT||tk.type===TokenType.DO)depth++;if(tk.type===TokenType.END||tk.type===TokenType.UNTIL){depth--;if(depth===0)break;}bodyTokens.push(tk);i++;}let hasAnonymousFunc=false;let pDepth=0;for(let j=0;j<bodyTokens.length;j++){const tk=bodyTokens[j];if(tk.type===TokenType.LPAREN)pDepth++;if(tk.type===TokenType.RPAREN)pDepth--;if(tk.type===TokenType.FUNCTION&&pDepth>0){hasAnonymousFunc=true;break;}}if(bodyTokens.length>=cfg.minStatements&&Math.random()<cfg.flattenRate&&!hasAnonymousFunc){const flattener=new ControlFlowFlattener(nameGen);result.push(...flattener.flattenFunction(bodyTokens));functionsFlattened++;}else{result.push(...bodyTokens);}if(i<tokens.length){result.push(tokens[i]);i++;}}else{result.push(t);i++;}}return{tokens:result,functionsFlattened};}
-
-// ============================================================================
-// PHASE 8: FUNCTION PROXY - ENHANCED
-// ============================================================================
-const PROXYABLE_FUNCTIONS=['print','warn','error','type','typeof','tostring','tonumber','pairs','ipairs','next','select','unpack','pcall','xpcall','assert','setmetatable','getmetatable','rawget','rawset','rawequal','loadstring','require'];
-export interface FunctionProxyResult{proxyTableName:string;proxyCode:string;functionsProxied:number}
-export function createFunctionProxy(tokens:Token[],nameGen:NameGenerator):{tokens:Token[];proxy:FunctionProxyResult}{const proxyTableName=nameGen.generate();const usedFunctions=new Set<string>();for(const t of tokens){if(t.type===TokenType.IDENTIFIER&&PROXYABLE_FUNCTIONS.includes(t.value)){const idx=tokens.indexOf(t);const prev=tokens[idx-1];if(prev&&(prev.type===TokenType.DOT||prev.type===TokenType.COLON))continue;usedFunctions.add(t.value);}}if(usedFunctions.size===0){return{tokens,proxy:{proxyTableName,proxyCode:'',functionsProxied:0}};}const proxyMap:Record<string,string>={};const entries:string[]=[];let idx=0;for(const fn of usedFunctions){const key=String.fromCharCode(97+idx%26)+(idx>=26?String(Math.floor(idx/26)):'');proxyMap[fn]=key;entries.push(`${key}=${fn}`);idx++;}const proxyCode=`local ${proxyTableName}={${entries.join(',')}}`;const result:Token[]=[];for(let i=0;i<tokens.length;i++){const t=tokens[i];if(t.type===TokenType.IDENTIFIER&&proxyMap[t.value]){const prev=tokens[i-1];if(prev&&(prev.type===TokenType.DOT||prev.type===TokenType.COLON)){result.push(t);continue;}result.push({type:TokenType.IDENTIFIER,value:proxyTableName,line:t.line,column:t.column});result.push({type:TokenType.DOT,value:'.',line:t.line,column:t.column});result.push({type:TokenType.IDENTIFIER,value:proxyMap[t.value],line:t.line,column:t.column});}else{result.push(t);}}return{tokens:result,proxy:{proxyTableName,proxyCode,functionsProxied:usedFunctions.size}};}
-
-// ============================================================================
-// REAL VM LAYER - LURAPH STYLE
-// ============================================================================
-class VMGenerator{
-    private nameGen=new NameGenerator();
-    private vmTableName:string;
-    private instructionSetName:string;
-    private registersName:string;
-    private pcName:string;
-    private bytecodeTableName:string;
-    constructor(){
-        this.vmTableName=this.nameGen.generate();
-        this.instructionSetName=this.nameGen.generate();
-        this.registersName=this.nameGen.generate();
-        this.pcName=this.nameGen.generate();
-        this.bytecodeTableName=this.nameGen.generate();
-    }
-    generateVMBootstrap():string{
-        const entries:string[]=[];
-        entries.push(`m=select`);
-        entries.push(`T=unpack or table.unpack`);
-        entries.push(`u=coroutine.wrap`);
-        entries.push(`g=getfenv or function()return _ENV end`);
-        entries.push(`B=bit32 or bit or{bxor=function(a,b)local r,p=0,1;while a>0 or b>0 do if a%2~=b%2 then r=r+p end;a,b,p=math.floor(a/2),math.floor(b/2),p*2 end;return r end}`);
-        // Generate fake VM functions
-        for(let i=0;i<8;i++){
-            entries.push(this.generateVMFunction());
-        }
-        // Generate fake data tables
-        for(let i=0;i<4;i++){
-            entries.push(this.generateDataTable());
-        }
-        return entries.join(',\n');
-    }
-    private generateVMFunction():string{
-        const name=this.nameGen.generate();
-        const variants=[
-            `${name}=function(a,X,K,e)e={};K[1]=tostring;K[2]=nil;K[3]=nil;X=0xC;repeat if X==0xC then K[2]=a.m;if not(not e[0xC13])then X=e[0xC13]else X=a:J(e,X)end else if X~=0x7B then else K[3]=a.Y;break end end until false;return e,X end`,
-            `${name}=function(a,X,K,e,z,Y,f)local r;f[0x2C]=nil;f[0x2D]=nil;X=nil;z=0x4C;while true do X,r,z=a:Nc(f,z,K,X);if r~=0xEEAF then else break end end;e=function(...)local K;K=a:Gc(...);return a.T(K)end;Y=X();f[0x27][0xD]=a.d;z=0x63;return X,z,Y,e end`,
-            `${name}=function(a,X,K)K=0x5E+((a.Dc(X[0x2256]+X[0x5FEA]-a.a[8],K,X[0x1AA0]))-X[0x2256]);X[0x47D4]=K;return K end`,
-            `${name}=function(a,a,X)X=a[0x1123];return X end`
-        ];
-        return variants[Math.floor(Math.random()*variants.length)];
-    }
-    private generateDataTable():string{
-        const name=this.nameGen.generate();
-        const entries:string[]=[];
-        const size=Math.floor(Math.random()*15)+5;
-        for(let i=0;i<size;i++){
-            const key=Math.floor(Math.random()*0x7FFF);
-            const value=Math.floor(Math.random()*0xFFFF);
-            entries.push(`[0x${key.toString(16).toUpperCase()}]=0x${value.toString(16).toUpperCase()}`);
-        }
-        return `${name}={${entries.join(',')}}`;
-    }
-}
-
-class LuraphWrapper{
-    private vmGen=new VMGenerator();
-    wrap(innerCode:string,decryptorCode:string,proxyCode:string):string{
-        const vmBootstrap=this.vmGen.generateVMBootstrap();
-        return`return(function(lI,...)
-${decryptorCode}
-${proxyCode}
-${innerCode}
-end)({${vmBootstrap}})`;
-    }
-}
-
-// ============================================================================
-// CODE GENERATOR - MINIMAL WHITESPACE
-// ============================================================================
-const KEYWORDS_NEED_SPACE=new Set([TokenType.LOCAL,TokenType.FUNCTION,TokenType.IF,TokenType.THEN,TokenType.ELSE,TokenType.ELSEIF,TokenType.WHILE,TokenType.DO,TokenType.FOR,TokenType.IN,TokenType.RETURN,TokenType.AND,TokenType.OR,TokenType.NOT,TokenType.END,TokenType.UNTIL,TokenType.REPEAT,TokenType.BREAK,TokenType.GOTO]);
-const SPACE_AFTER=new Set([...KEYWORDS_NEED_SPACE,TokenType.IDENTIFIER,TokenType.NUMBER,TokenType.STRING,TokenType.TRUE,TokenType.FALSE,TokenType.NIL,TokenType.RPAREN,TokenType.RBRACE,TokenType.RBRACKET]);
-const SPACE_BEFORE=new Set([TokenType.IDENTIFIER,TokenType.NUMBER,TokenType.STRING,TokenType.TRUE,TokenType.FALSE,TokenType.NIL,TokenType.FUNCTION,TokenType.IF,TokenType.THEN,TokenType.ELSE,TokenType.END,TokenType.LOCAL,TokenType.RETURN,TokenType.AND,TokenType.OR,TokenType.NOT,TokenType.DO,TokenType.WHILE,TokenType.FOR,TokenType.IN,TokenType.UNTIL,TokenType.REPEAT,TokenType.ELSEIF,TokenType.LBRACE]);
-const NO_SPACE_AFTER=new Set([TokenType.LPAREN,TokenType.LBRACE,TokenType.LBRACKET,TokenType.DOT,TokenType.COLON,TokenType.HASH]);
-const NO_SPACE_BEFORE=new Set([TokenType.RPAREN,TokenType.RBRACE,TokenType.RBRACKET,TokenType.DOT,TokenType.COLON,TokenType.COMMA,TokenType.SEMICOLON,TokenType.LPAREN,TokenType.LBRACKET]);
-
-export function tokensToCode(tokens:Token[]):string{
-    let code='';
-    for(let i=0;i<tokens.length;i++){
-        const t=tokens[i];
-        const prev=tokens[i-1];
-        if(t.type===TokenType.EOF)continue;
-        if(prev&&prev.type!==TokenType.EOF){
-            let needsSpace=false;
-            if(KEYWORDS_NEED_SPACE.has(prev.type)){needsSpace=true;}
-            else if(!NO_SPACE_AFTER.has(prev.type)&&!NO_SPACE_BEFORE.has(t.type)){
-                if(SPACE_AFTER.has(prev.type)&&SPACE_BEFORE.has(t.type)){needsSpace=true;}
-            }
-            if(needsSpace)code+=' ';
-        }
-        if(t.type===TokenType.STRING){
-            if(t.value.startsWith('"')||t.value.startsWith("'")){code+=t.value;}
-            else{
-                const lit=t.literal??'';
-                const escaped=String(lit).replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/\n/g,'\\n').replace(/\r/g,'\\r').replace(/\t/g,'\\t');
-                code+='"'+escaped+'"';
-            }
-        }else{code+=t.value;}
-    }
-    return code;
-}
-
-// ============================================================================
-// MAIN OBFUSCATE - OPTIMIZED
-// ============================================================================
-export interface ObfuscateOptions{
-    debug?:boolean;
-    renameVariables?:boolean;
-    encryptStrings?:boolean;
-    obfuscateNumbers?:boolean;
-    obfuscateProperties?:boolean;
-    obfuscateTableKeys?:boolean;
-    insertOpaquePredicates?:boolean;
-    opaqueInsertionRate?:number;
-    flattenControlFlow?:boolean;
-    flattenRate?:number;
-    proxyFunctions?:boolean;
-}
-export interface ObfuscateResult{
-    code:string;
-    map:RenameMap;
-    stats:{
-        originalTokens:number;
-        identifiersRenamed:number;
-        stringsEncrypted:number;
-        numbersObfuscated:number;
-        predicatesInserted:number;
-        deadCodeInserted:number;
-        propertiesObfuscated:number;
-        tableKeysObfuscated:number;
-        functionsFlattened:number;
-        functionsProxied:number;
-        originalLength:number;
-        outputLength:number;
-        timeMs:number;
-    };
-    debugLogs?:DebugLog[];
-}
-
-export function obfuscate(source:string,options:ObfuscateOptions={}):ObfuscateResult{
-    const startTime=Date.now();
-    const opts={
-        debug:options.debug??false,
-        renameVariables:options.renameVariables??true,
-        encryptStrings:options.encryptStrings??true,
-        obfuscateNumbers:options.obfuscateNumbers??true,
-        obfuscateProperties:options.obfuscateProperties??true,
-        obfuscateTableKeys:options.obfuscateTableKeys??true,
-        insertOpaquePredicates:options.insertOpaquePredicates??true,
-        opaqueInsertionRate:options.opaqueInsertionRate??0.15,
-        flattenControlFlow:options.flattenControlFlow??true,
-        flattenRate:options.flattenRate??0.3,
-        proxyFunctions:options.proxyFunctions??true
-    };
-    enableDebug(opts.debug);
-    globalNameGen.reset();
-    let tokens=tokenize(source);
-    const originalTokenCount=tokens.length;
-    let renameMap:RenameMap={};
-    if(opts.renameVariables){renameMap=createRenameMap(tokens,globalNameGen);tokens=applyRenameMap(tokens,renameMap);}
-    let stringsEncrypted=0;let decryptorCode='';let decryptorName='';let xorKey=0;
-    if(opts.encryptStrings){const encResult=encryptStrings(tokens,globalNameGen);tokens=encResult.tokens;decryptorCode=encResult.encryption.decryptorCode;decryptorName=encResult.encryption.decryptorName;xorKey=encResult.encryption.xorKey;stringsEncrypted=encResult.encryption.encryptedStrings.size;}
-    let propertiesObfuscated=0;
-    if(opts.obfuscateProperties&&decryptorName){const propResult=obfuscatePropertyAccess(tokens,decryptorName,xorKey);tokens=propResult.tokens;propertiesObfuscated=propResult.propertiesObfuscated;}
-    let tableKeysObfuscated=0;
-    if(opts.obfuscateTableKeys&&decryptorName){const keyResult=obfuscateTableKeys(tokens,decryptorName,xorKey);tokens=keyResult.tokens;tableKeysObfuscated=keyResult.keysObfuscated;}
-    let numbersObfuscated=0;
-    if(opts.obfuscateNumbers){const numResult=obfuscateNumbers(tokens);tokens=numResult.tokens;numbersObfuscated=numResult.numbersObfuscated;}
-    let predicatesInserted=0;let deadCodeInserted=0;
-    if(opts.insertOpaquePredicates){const opaqueResult=injectOpaquePredicates(tokens,globalNameGen,{insertionRate:opts.opaqueInsertionRate});tokens=opaqueResult.tokens;predicatesInserted=opaqueResult.predicatesInserted;deadCodeInserted=opaqueResult.deadCodeInserted;}
-    let functionsFlattened=0;
-    if(opts.flattenControlFlow){const cffResult=flattenControlFlow(tokens,globalNameGen,{flattenRate:opts.flattenRate,minStatements:3});tokens=cffResult.tokens;functionsFlattened=cffResult.functionsFlattened;}
-    let functionsProxied=0;let proxyCode='';
-    if(opts.proxyFunctions){const proxyResult=createFunctionProxy(tokens,globalNameGen);tokens=proxyResult.tokens;proxyCode=proxyResult.proxy.proxyCode;functionsProxied=proxyResult.proxy.functionsProxied;}
-    let innerCode=tokensToCode(tokens);
-    const wrapper=new LuraphWrapper();
-    const code=wrapper.wrap(innerCode,decryptorCode,proxyCode);
-    return{
-        code,
-        map:renameMap,
-        stats:{
-            originalTokens:originalTokenCount,
-            identifiersRenamed:Object.keys(renameMap).length,
-            stringsEncrypted,
-            numbersObfuscated,
-            predicatesInserted,
-            deadCodeInserted,
-            propertiesObfuscated,
-            tableKeysObfuscated,
-            functionsFlattened,
-            functionsProxied,
-            originalLength:source.length,
-            outputLength:code.length,
-            timeMs:Date.now()-startTime
-        },
-        debugLogs:opts.debug?getDebugLogs():undefined
-    };
-}
-
-export default{obfuscate,tokenize,enableDebug,getDebugLogs};
+class NameGen{private chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';private counter=0;next():string{const n=this.counter++;if(n<52)return this.chars[n];return this.chars[Math.floor(n/52)-1]+this.chars[n%52];}reset(){this.counter=0;}}
+function shuffleArray<T>(arr:T[]):T[]{const r=[...arr];for(let i=r.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[r[i],r[j]]=[r[j],r[i]];}return r;}
+function encodeNumber(n:number):string{const r=Math.random();if(r<0.33)return n.toString();if(r<0.66)return'0x'+n.toString(16).toUpperCase();return'0x'+n.toString(16);}
+function encryptBytes(data:number[],key:number):string{return data.map(b=>String.fromCharCode((b^key)&0xFF)).join('');}
+function serializePrototype(proto:Prototype):number[]{const bytes:number[]=[];const writeInt=(n:number)=>{bytes.push(n&0xFF,(n>>8)&0xFF,(n>>16)&0xFF,(n>>24)&0xFF);};const writeDouble=(n:number)=>{const buf=new ArrayBuffer(8);new Float64Array(buf)[0]=n;const view=new Uint8Array(buf);for(let i=0;i<8;i++)bytes.push(view[i]);};const writeString=(s:string)=>{writeInt(s.length);for(let i=0;i<s.length;i++)bytes.push(s.charCodeAt(i)&0xFF);};writeInt(proto.numParams);bytes.push(proto.isVararg?1:0);writeInt(proto.maxStack);writeInt(proto.code.length);for(const inst of proto.code){bytes.push(inst.op);writeInt(inst.a);writeInt(inst.b);writeInt(inst.c);writeInt(inst.bx??0);writeInt(inst.sbx??0);}writeInt(proto.constants.length);for(const k of proto.constants){if(k===null){bytes.push(0);}else if(typeof k==='boolean'){bytes.push(1);bytes.push(k?1:0);}else if(typeof k==='number'){bytes.push(2);writeDouble(k);}else{bytes.push(3);writeString(k);}}writeInt(proto.protos.length);for(const p of proto.protos){const childBytes=serializePrototype(p);writeInt(childBytes.length);bytes.push(...childBytes);}writeInt(proto.upvalues.length);for(const uv of proto.upvalues){bytes.push(uv.instack?1:0);writeInt(uv.idx);}return bytes;}
+class VMGenerator{private ng=new NameGen();private opcodeMap:Map<number,number>=new Map();private key:number;constructor(){this.key=Math.floor(Math.random()*200)+50;this.generateOpcodeMapping();}private generateOpcodeMapping():void{const opcodes=Object.values(OpCode).filter(v=>typeof v==='number')as number[];const shuffled=shuffleArray([...opcodes]);for(let i=0;i<opcodes.length;i++){this.opcodeMap.set(opcodes[i],shuffled[i]);}}private mapOpcode(op:OpCode):number{return this.opcodeMap.get(op)??op;}private remapBytecode(proto:Prototype):Prototype{const remapped:Prototype={...proto,code:proto.code.map(inst=>({...inst,op:this.mapOpcode(inst.op)})),protos:proto.protos.map(p=>this.remapBytecode(p))};return remapped;}generate(proto:Prototype):string{const remapped=this.remapBytecode(proto);const bytes=serializePrototype(remapped);const encrypted=encryptBytes(bytes,this.key);const b64=Buffer.from(encrypted,'binary').toString('base64');const vBytecode=this.ng.next();const vKey=this.ng.next();const vDecode=this.ng.next();const vDeserialize=this.ng.next();const vExecute=this.ng.next();const vCreateEnv=this.ng.next();const vOpcodes=this.ng.next();const vBxor=this.ng.next();const vBand=this.ng.next();const vBor=this.ng.next();const vRshift=this.ng.next();const vLshift=this.ng.next();const opcodeTable=this.generateOpcodeTable();return`return(function()
+local ${vBxor},${vBand},${vBor},${vRshift},${vLshift}
+do
+local b=bit32 or bit
+if b then
+${vBxor},${vBand},${vBor},${vRshift},${vLshift}=b.bxor,b.band,b.bor,b.rshift,b.lshift
+else
+${vBxor}=function(a,c)local r,p=0,1 while a>0 or c>0 do local ra,rb=a%2,c%2 if ra~=rb then r=r+p end a,c,p=(a-ra)/2,(c-rb)/2,p*2 end return r end
+${vBand}=function(a,c)local r,p=0,1 while a>0 and c>0 do local ra,rb=a%2,c%2 if ra==1 and rb==1 then r=r+p end a,c,p=(a-ra)/2,(c-rb)/2,p*2 end return r end
+${vBor}=function(a,c)local r,p=0,1 while a>0 or c>0 do local ra,rb=a%2,c%2 if ra==1 or rb==1 then r=r+p end a,c,p=(a-ra)/2,(c-rb)/2,p*2 end return r end
+${vRshift}=function(a,n)return math.floor(a/(2^n))end
+${vLshift}=function(a,n)return a*(2^n)end
+end
+end
+local ${vKey}=${encodeNumber(this.key)}
+local ${vDecode}=(function()
+local b64='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+local dec={}
+for i=1,64 do dec[b64:sub(i,i)]=i-1 end
+return function(s)
+local r={}
+local v,bits=0,0
+for i=1,#s do
+local c=s:sub(i,i)
+if dec[c] then
+v=${vLshift}(v,6)+dec[c]
+bits=bits+6
+while bits>=8 do
+bits=bits-8
+r[#r+1]=string.char(${vBand}(${vRshift}(v,bits),255))
+end
+end
+end
+return table.concat(r)
+end
+end)()
+local ${vBytecode}="${b64}"
+local function ${vDeserialize}(data,key)
+local pos=1
+local function readByte()local b=data:byte(pos)pos=pos+1 return ${vBxor}(b,key)end
+local function readInt()local a,b,c,d=readByte(),readByte(),readByte(),readByte()return a+b*256+c*65536+d*16777216 end
+local function readSInt()local n=readInt()if n>=2147483648 then n=n-4294967296 end return n end
+local function readDouble()local bytes={}for i=1,8 do bytes[i]=readByte()end local sign=(bytes[8]>127)and-1 or 1 local exp=${vBand}(bytes[8],127)*16+${vRshift}(bytes[7],4)local mant=${vBand}(bytes[7],15)for i=6,1,-1 do mant=mant*256+bytes[i]end if exp==0 then return 0 elseif exp==2047 then return mant==0 and sign*(1/0)or(0/0)end return sign*(1+mant/4503599627370496)*(2^(exp-1023))end
+local function readString()local len=readInt()local chars={}for i=1,len do chars[i]=string.char(readByte())end return table.concat(chars)end
+local function readProto()
+local numParams=readInt()
+local isVararg=readByte()==1
+local maxStack=readInt()
+local codeLen=readInt()
+local code={}
+for i=1,codeLen do
+local op=readByte()
+local a=readSInt()
+local b=readSInt()
+local c=readSInt()
+local bx=readSInt()
+local sbx=readSInt()
+code[i]={op=op,a=a,b=b,c=c,bx=bx,sbx=sbx}
+end
+local constLen=readInt()
+local constants={}
+for i=1,constLen do
+local t=readByte()
+if t==0 then constants[i]=nil
+elseif t==1 then constants[i]=readByte()==1
+elseif t==2 then constants[i]=readDouble()
+else constants[i]=readString()end
+end
+local protoLen=readInt()
+local protos={}
+for i=1,protoLen do
+local childLen=readInt()
+local childData=data:sub(pos,pos+childLen-1)
+pos=pos+childLen
+protos[i]=readProto()
+end
+local upvalLen=readInt()
+local upvalues={}
+for i=1,upvalLen do
+upvalues[i]={instack=readByte()==1,idx=readInt()}
+end
+return{code=code,constants=constants,protos=protos,numParams=numParams,isVararg=isVararg,maxStack=maxStack,upvalues=upvalues}
+end
+return readProto()
+end
+local ${vOpcodes}={${opcodeTable}}
+local function ${vCreateEnv}()
+local env=setmetatable({},{__index=_G or _ENV})
+return env
+end
+local function ${vExecute}(proto,env,upvals)
+local code=proto.code
+local constants=proto.constants
+local protos=proto.protos
+local stack={}
+local top=0
+local openUpvals={}
+local pc=1
+local base=0
+local function RK(x)
+if x>=256 then return constants[x-255]else return stack[base+x]end
+end
+while true do
+local inst=code[pc]
+local op=inst.op
+local a,b,c,bx,sbx=inst.a,inst.b,inst.c,inst.bx,inst.sbx
+pc=pc+1
+a=base+a
+${this.generateOpcodeHandlers(vOpcodes)}
+end
+end
+local proto=${vDeserialize}(${vDecode}(${vBytecode}),${vKey})
+local env=${vCreateEnv}()
+return ${vExecute}(proto,env,{})
+end)()`;}
+private generateOpcodeTable():string{const entries:string[]=[];this.opcodeMap.forEach((mapped,original)=>{entries.push(`[${encodeNumber(mapped)}]=${encodeNumber(original)}`);});return entries.join(',');}
+private generateOpcodeHandlers(vOpcodes:string):string{return`local realOp=${vOpcodes}[op]
+if realOp==0 then stack[a]=nil
+elseif realOp==1 then stack[a]=b==1 if c==1 then pc=pc+1 end
+elseif realOp==2 then stack[a]=constants[bx+1]
+elseif realOp==3 then stack[a]=b
+elseif realOp==4 then stack[a]=env[constants[bx+1]]
+elseif realOp==5 then env[constants[bx+1]]=stack[a]
+elseif realOp==6 then stack[a]=stack[base+b]
+elseif realOp==7 then stack[base+b]=stack[a]
+elseif realOp==8 then stack[a]=upvals[b+1].val
+elseif realOp==9 then upvals[b+1].val=stack[a]
+elseif realOp==10 then stack[a]=stack[base+b][RK(c)]
+elseif realOp==11 then stack[base+a][RK(b)]=RK(c)
+elseif realOp==12 then stack[a]={}
+elseif realOp==14 then stack[a]=stack[base+b]+stack[base+c]
+elseif realOp==15 then stack[a]=stack[base+b]-stack[base+c]
+elseif realOp==16 then stack[a]=stack[base+b]*stack[base+c]
+elseif realOp==17 then stack[a]=stack[base+b]/stack[base+c]
+elseif realOp==18 then stack[a]=stack[base+b]%stack[base+c]
+elseif realOp==19 then stack[a]=stack[base+b]^stack[base+c]
+elseif realOp==20 then stack[a]=math.floor(stack[base+b]/stack[base+c])
+elseif realOp==21 then stack[a]=-stack[base+b]
+elseif realOp==22 then stack[a]=not stack[base+b]
+elseif realOp==23 then stack[a]=#stack[base+b]
+elseif realOp==24 then stack[a]=tostring(stack[base+b])..tostring(stack[base+c])
+elseif realOp==25 then if(stack[base+b]==stack[base+c])~=(a==1)then pc=pc+1 end
+elseif realOp==26 then if(stack[base+b]<stack[base+c])~=(a==1)then pc=pc+1 end
+elseif realOp==27 then if(stack[base+b]<=stack[base+c])~=(a==1)then pc=pc+1 end
+elseif realOp==28 then pc=pc+sbx
+elseif realOp==29 then if stack[a]then pc=pc+sbx end
+elseif realOp==30 then if not stack[a]then pc=pc+sbx end
+elseif realOp==31 then
+local nargs=b-1
+local nrets=c-1
+local func=stack[a]
+local args={}
+for i=1,nargs do args[i]=stack[a+i]end
+local results={func(unpack(args,1,nargs))}
+if nrets<0 then
+for i=1,#results do stack[a+i-1]=results[i]end
+top=a+#results-1
+else
+for i=1,nrets do stack[a+i-1]=results[i]end
+end
+elseif realOp==33 then
+local nrets=b-1
+if nrets<0 then nrets=top-a+1 end
+local rets={}
+for i=1,nrets do rets[i]=stack[a+i-1]end
+return unpack(rets,1,nrets)
+elseif realOp==34 then
+local newProto=protos[bx+1]
+local newUpvals={}
+for i,uv in ipairs(newProto.upvalues)do
+if uv.instack then
+if not openUpvals[base+uv.idx]then
+openUpvals[base+uv.idx]={val=stack[base+uv.idx]}
+end
+newUpvals[i]=openUpvals[base+uv.idx]
+else
+newUpvals[i]=upvals[uv.idx+1]
+end
+end
+stack[a]=function(...)
+local args={...}
+local childEnv=setmetatable({},{__index=env})
+return ${vExecute}(newProto,childEnv,newUpvals,args)
+end
+elseif realOp==35 then
+local varargs=upvals.varargs or{}
+local want=b-1
+if want<0 then
+for i=1,#varargs do stack[a+i-1]=varargs[i]end
+top=a+#varargs-1
+else
+for i=1,want do stack[a+i-1]=varargs[i]end
+end
+elseif realOp==36 then
+local obj=stack[base+b]
+local key=RK(c)
+stack[a+1]=obj
+stack[a]=obj[key]
+elseif realOp==37 then
+stack[a]=stack[a]-stack[a+2]
+pc=pc+sbx+1
+elseif realOp==38 then
+local step=stack[a+2]
+local idx=stack[a]+step
+local limit=stack[a+1]
+stack[a]=idx
+if(step>0 and idx<=limit)or(step<=0 and idx>=limit)then
+stack[a+3]=idx
+pc=pc+sbx
+end
+elseif realOp==39 then
