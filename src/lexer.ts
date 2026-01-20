@@ -1,5 +1,5 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR v0.3.4 - PHASE 3: TABLE KEY DETECTION FIX
+// NEPHILIM OBFUSCATOR v0.3.5 - CRITICAL SPACING FIX
 // ============================================================================
 
 export enum TokenType {
@@ -320,96 +320,42 @@ class NameGenerator {
 }
 
 // ============================================================================
-// STATEMENT BOUNDARY KEYWORDS - Used to detect when we leave a table context
+// STATEMENT KEYWORDS
 // ============================================================================
 
 const STATEMENT_KEYWORDS = new Set([
-    TokenType.LOCAL,
-    TokenType.FUNCTION,
-    TokenType.IF,
-    TokenType.THEN,
-    TokenType.ELSE,
-    TokenType.ELSEIF,
-    TokenType.END,
-    TokenType.DO,
-    TokenType.WHILE,
-    TokenType.FOR,
-    TokenType.REPEAT,
-    TokenType.UNTIL,
-    TokenType.RETURN,
-    TokenType.BREAK,
-    TokenType.GOTO,
+    TokenType.LOCAL, TokenType.FUNCTION, TokenType.IF, TokenType.THEN,
+    TokenType.ELSE, TokenType.ELSEIF, TokenType.END, TokenType.DO,
+    TokenType.WHILE, TokenType.FOR, TokenType.REPEAT, TokenType.UNTIL,
+    TokenType.RETURN, TokenType.BREAK, TokenType.GOTO,
 ]);
 
 // ============================================================================
-// FIXED: Check if identifier at position is a TABLE KEY (not regular assignment)
+// TABLE KEY DETECTION
 // ============================================================================
 
 function isTableKey(tokens: Token[], index: number): boolean {
-    // Must be followed by = (assignment)
     const next = tokens[index + 1];
-    if (!next || next.type !== TokenType.ASSIGN) {
-        return false;
-    }
-    
-    // Check token before: if directly after { or , at same brace level, it's a table key
-    // Examples of table keys:
-    //   { key = value }     -- key is table key
-    //   { a = 1, b = 2 }    -- a, b are table keys
-    //   { [expr] = value }  -- not our concern (uses brackets)
-    
-    // Examples of NON table keys:
-    //   x = 1               -- regular assignment
-    //   obj.x = 1           -- property assignment (already handled by prev.type === DOT)
-    //   t[x] = 1            -- indexed assignment
+    if (!next || next.type !== TokenType.ASSIGN) return false;
     
     let braceDepth = 0;
     
     for (let j = index - 1; j >= 0; j--) {
         const t = tokens[j];
         
-        // Track brace depth (going backwards)
-        if (t.type === TokenType.RBRACE) {
-            braceDepth++;
-            continue;
-        }
-        
+        if (t.type === TokenType.RBRACE) { braceDepth++; continue; }
         if (t.type === TokenType.LBRACE) {
-            if (braceDepth === 0) {
-                // Found the opening { for our context - this IS a table key
-                return true;
-            }
+            if (braceDepth === 0) return true;
             braceDepth--;
             continue;
         }
         
-        // If we're inside a nested brace (braceDepth > 0), keep looking
-        if (braceDepth > 0) {
-            continue;
-        }
+        if (braceDepth > 0) continue;
         
-        // At braceDepth 0, check for statement boundaries
-        
-        // Semicolon always ends a statement
-        if (t.type === TokenType.SEMICOLON) {
-            return false;
-        }
-        
-        // Statement keywords indicate we're outside any table
-        if (STATEMENT_KEYWORDS.has(t.type)) {
-            return false;
-        }
-        
-        // Closing paren/bracket at depth 0 means we passed a function call or index
-        // This is a statement boundary in practice
-        if (t.type === TokenType.RPAREN || t.type === TokenType.RBRACKET) {
-            // Could be end of: function call, function def, if condition, etc.
-            // Keep looking, but these are suspicious
-            continue;
-        }
+        if (t.type === TokenType.SEMICOLON) return false;
+        if (STATEMENT_KEYWORDS.has(t.type)) return false;
     }
     
-    // Reached start of tokens without finding { or statement boundary
     return false;
 }
 
@@ -428,20 +374,13 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
         const prev = tokens[i - 1];
         const prev2 = tokens[i - 2];
         
-        // Skip property access: obj.prop or obj:method
         if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) continue;
-        
-        // Skip table keys
         if (isTableKey(tokens, i)) continue;
         
         let isLocal = false;
         
-        // 1. Direct local: local x
-        if (prev && prev.type === TokenType.LOCAL) {
-            isLocal = true;
-        }
+        if (prev && prev.type === TokenType.LOCAL) isLocal = true;
         
-        // 2. Multiple local: local a, b, c
         if (!isLocal && prev && prev.type === TokenType.COMMA) {
             for (let j = i - 1; j >= 0; j--) {
                 const tk = tokens[j];
@@ -451,14 +390,10 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
             }
         }
         
-        // 3. Local function: local function name
         if (!isLocal && prev && prev.type === TokenType.FUNCTION) {
-            if (prev2 && prev2.type === TokenType.LOCAL) {
-                isLocal = true;
-            }
+            if (prev2 && prev2.type === TokenType.LOCAL) isLocal = true;
         }
         
-        // 4. Function parameter
         if (!isLocal) {
             let parenDepth = 0;
             for (let j = i - 1; j >= 0; j--) {
@@ -467,7 +402,6 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
                 else if (tk.type === TokenType.LPAREN) {
                     parenDepth--;
                     if (parenDepth < 0) {
-                        // Check for function keyword before this paren
                         for (let k = j - 1; k >= 0; k--) {
                             if (tokens[k].type === TokenType.FUNCTION) { isLocal = true; break; }
                             if (tokens[k].type !== TokenType.IDENTIFIER) break;
@@ -479,7 +413,6 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
             }
         }
         
-        // 5. For loop variables
         if (!isLocal) {
             for (let j = i - 1; j >= 0; j--) {
                 const tk = tokens[j];
@@ -490,7 +423,7 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
         
         if (isLocal) {
             localVars.add(t.value);
-            debug('ANALYZE', `Found local: ${t.value} at line ${t.line}`);
+            debug('ANALYZE', `Found local: ${t.value}`);
         }
     }
     
@@ -510,10 +443,6 @@ export function createRenameMap(tokens: Token[]): RenameMap {
     return map;
 }
 
-// ============================================================================
-// APPLY RENAME
-// ============================================================================
-
 export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
     const result: Token[] = [];
     
@@ -527,21 +456,17 @@ export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
         
         const prev = tokens[i - 1];
         
-        // Skip property access
         if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) {
             result.push(t);
             continue;
         }
         
-        // Skip table keys (using same logic as analysis)
         if (isTableKey(tokens, i)) {
             result.push(t);
             continue;
         }
         
-        // Rename
         result.push({ ...t, value: map[t.value], literal: map[t.value] });
-        debug('APPLY', `Renamed ${t.value} at line ${t.line}`);
     }
     
     return result;
@@ -585,8 +510,6 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     const decryptorName = generateObfuscatedName('_');
     const globalKey = generateXorKey();
     
-    debug('ENCRYPT', `XOR key: ${globalKey}`);
-    
     const result: Token[] = [];
     let stringCount = 0;
     
@@ -610,8 +533,6 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
             result.push(t);
         }
     }
-    
-    debug('ENCRYPT', `Encrypted ${stringCount} strings`);
     
     const decryptorCode = `local ${decryptorName}=(function()local b=bit32 or bit local x=b and b.bxor or function(a,c)local r,p=0,1 while a>0 or c>0 do if a%2~=c%2 then r=r+p end a,c,p=math.floor(a/2),math.floor(c/2),p*2 end return r end return function(s,k)local o=""for i=1,#s do o=o..string.char(x(s:byte(i),k))end return o end end)()`;
     
@@ -690,7 +611,6 @@ export function obfuscateNumbers(tokens: Token[]): { tokens: Token[]; numbersObf
         if (t.type === TokenType.NUMBER && typeof t.literal === 'number') {
             const num = t.literal;
             
-            // Skip for loops
             let inForLoop = false;
             for (let j = i - 1; j >= Math.max(0, i - 15); j--) {
                 if (tokens[j].type === TokenType.FOR) { inForLoop = true; break; }
@@ -698,7 +618,6 @@ export function obfuscateNumbers(tokens: Token[]): { tokens: Token[]; numbersObf
             }
             if (inForLoop) { result.push(t); continue; }
             
-            // Skip simple indices
             const prev = tokens[i - 1];
             if (prev?.type === TokenType.LBRACKET && num >= 1 && num <= 10 && Number.isInteger(num)) {
                 result.push(t); continue;
@@ -748,20 +667,27 @@ function expressionToTokens(expr: string, line: number, column: number): Token[]
 }
 
 // ============================================================================
-// CODE GENERATOR
+// CODE GENERATOR - FIXED SPACING
 // ============================================================================
 
-const SPACE_AFTER = new Set([
+// Keywords that REQUIRE space after them
+const KEYWORDS_NEED_SPACE_AFTER = new Set([
     TokenType.LOCAL, TokenType.FUNCTION, TokenType.IF, TokenType.THEN,
     TokenType.ELSE, TokenType.ELSEIF, TokenType.WHILE, TokenType.DO,
     TokenType.FOR, TokenType.IN, TokenType.RETURN, TokenType.AND,
     TokenType.OR, TokenType.NOT, TokenType.END, TokenType.UNTIL,
     TokenType.REPEAT, TokenType.BREAK, TokenType.GOTO,
+]);
+
+// Tokens that need space after (general)
+const SPACE_AFTER = new Set([
+    ...KEYWORDS_NEED_SPACE_AFTER,
     TokenType.IDENTIFIER, TokenType.NUMBER, TokenType.STRING,
     TokenType.TRUE, TokenType.FALSE, TokenType.NIL,
     TokenType.RPAREN, TokenType.RBRACE, TokenType.RBRACKET
 ]);
 
+// Tokens that need space before
 const SPACE_BEFORE = new Set([
     TokenType.IDENTIFIER, TokenType.NUMBER, TokenType.STRING,
     TokenType.TRUE, TokenType.FALSE, TokenType.NIL, TokenType.FUNCTION,
@@ -769,14 +695,17 @@ const SPACE_BEFORE = new Set([
     TokenType.LOCAL, TokenType.RETURN, TokenType.AND, TokenType.OR,
     TokenType.NOT, TokenType.DO, TokenType.WHILE, TokenType.FOR,
     TokenType.IN, TokenType.UNTIL, TokenType.REPEAT, TokenType.ELSEIF,
-    TokenType.LBRACE, TokenType.LPAREN
+    TokenType.LBRACE
 ]);
 
+// Tokens that should NOT have space after - REMOVED NOT!
 const NO_SPACE_AFTER = new Set([
     TokenType.LPAREN, TokenType.LBRACE, TokenType.LBRACKET,
-    TokenType.DOT, TokenType.COLON, TokenType.HASH, TokenType.NOT
+    TokenType.DOT, TokenType.COLON, TokenType.HASH
+    // TokenType.NOT was here - REMOVED!
 ]);
 
+// Tokens that should NOT have space before
 const NO_SPACE_BEFORE = new Set([
     TokenType.RPAREN, TokenType.RBRACE, TokenType.RBRACKET,
     TokenType.DOT, TokenType.COLON, TokenType.COMMA, TokenType.SEMICOLON,
@@ -792,9 +721,20 @@ export function tokensToCode(tokens: Token[], prependCode: string = ''): string 
         if (t.type === TokenType.EOF) continue;
         
         if (prev && prev.type !== TokenType.EOF) {
-            const needsSpace = !NO_SPACE_AFTER.has(prev.type) &&
-                               !NO_SPACE_BEFORE.has(t.type) &&
-                               (SPACE_AFTER.has(prev.type) || SPACE_BEFORE.has(t.type));
+            // Check if we need a space
+            let needsSpace = false;
+            
+            // Rule 1: Keywords ALWAYS need space after
+            if (KEYWORDS_NEED_SPACE_AFTER.has(prev.type)) {
+                needsSpace = true;
+            }
+            // Rule 2: General spacing rules
+            else if (!NO_SPACE_AFTER.has(prev.type) && !NO_SPACE_BEFORE.has(t.type)) {
+                if (SPACE_AFTER.has(prev.type) || SPACE_BEFORE.has(t.type)) {
+                    needsSpace = true;
+                }
+            }
+            
             if (needsSpace) code += ' ';
         }
         
@@ -855,20 +795,17 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
     };
     
     enableDebug(opts.debug);
-    debug('MAIN', 'Nephilim v0.3.4 starting');
+    debug('MAIN', 'Nephilim v0.3.5 starting');
     
     let tokens = tokenize(source);
     const originalTokenCount = tokens.length;
     
-    // Phase 1: Rename
     let renameMap: RenameMap = {};
     if (opts.renameVariables) {
         renameMap = createRenameMap(tokens);
         tokens = applyRenameMap(tokens, renameMap);
-        debug('MAIN', `Renamed ${Object.keys(renameMap).length} identifiers`);
     }
     
-    // Phase 2: Encrypt strings
     let stringsEncrypted = 0;
     let prependCode = '';
     if (opts.encryptStrings) {
@@ -878,7 +815,6 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
         stringsEncrypted = encResult.encryption.encryptedStrings.size;
     }
     
-    // Phase 3: Numbers
     let numbersObfuscated = 0;
     if (opts.obfuscateNumbers) {
         const numResult = obfuscateNumbers(tokens);
