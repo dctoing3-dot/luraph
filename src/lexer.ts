@@ -1,5 +1,5 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR v0.3.1 - PHASE 3: NUMBER OBFUSCATION (FIXED)
+// NEPHILIM OBFUSCATOR v0.3.2 - PHASE 3: FIXED STRING & NUMBER OBFUSCATION
 // ============================================================================
 
 export enum TokenType {
@@ -265,34 +265,44 @@ export class Lexer {
 export function tokenize(source: string): Token[] { return new Lexer(source).tokenize(); }
 
 // ============================================================================
-// RESERVED GLOBALS
+// RESERVED GLOBALS - EXPANDED
 // ============================================================================
 
 const RESERVED = new Set([
+    // Lua globals
     'print', 'type', 'tostring', 'tonumber', 'pairs', 'ipairs', 'next', 'select',
     'unpack', 'pcall', 'xpcall', 'error', 'assert', 'setmetatable', 'getmetatable',
     'rawget', 'rawset', 'rawequal', 'loadstring', 'load', 'dofile', 'require',
     'collectgarbage', 'setfenv', 'getfenv', 'math', 'string', 'table', 'os', 'io',
     'coroutine', 'debug', 'bit32', 'bit', 'utf8', 'package',
+    
+    // Roblox globals
     'game', 'workspace', 'script', 'plugin', 'wait', 'spawn', 'delay', 'tick',
-    'time', 'elapsedTime', 'warn', 'typeof', 'task', 'version',
+    'time', 'elapsedTime', 'warn', 'typeof', 'task', 'version', 'settings',
     'Instance', 'Vector3', 'Vector2', 'CFrame', 'Color3', 'UDim', 'UDim2', 'Enum',
     'Ray', 'Region3', 'Rect', 'BrickColor', 'TweenInfo', 'NumberSequence',
-    'ColorSequence', 'NumberRange', 'PhysicalProperties', 'Random',
+    'ColorSequence', 'NumberRange', 'PhysicalProperties', 'Random', 'Axes', 'Faces',
+    'PathWaypoint', 'OverlapParams', 'RaycastParams', 'DockWidgetPluginGuiInfo',
+    'FloatCurveKey', 'RotationCurveKey', 'Font', 'NumberSequenceKeypoint',
+    'ColorSequenceKeypoint', 'RBXScriptConnection', 'RBXScriptSignal',
+    
+    // Executor globals
     'getgenv', 'getrenv', 'getrawmetatable', 'setrawmetatable', 'hookfunction',
     'hookmetamethod', 'newcclosure', 'islclosure', 'iscclosure', 'checkcaller',
     'getinfo', 'getupvalue', 'setupvalue', 'getconstant', 'setconstant',
     'getconnections', 'firesignal', 'fireserver', 'fireclient', 'syn', 'Synapse',
     'Drawing', 'request', 'http_request', 'HttpGet', 'HttpPost', 'readfile',
     'writefile', 'appendfile', 'isfile', 'isfolder', 'makefolder', 'listfiles',
-    'setclipboard', 'identifyexecutor', 'getexecutorname',
-    '_G', '_VERSION', '_ENV', 'self', 'nil', 'true', 'false',
-    'GetService', 'FindFirstChild', 'WaitForChild', 'GetChildren', 'GetDescendants',
-    'IsA', 'Clone', 'Destroy', 'Connect', 'Disconnect', 'Fire', 'Invoke',
-    'SetCore', 'GetPropertyChangedSignal', 'GetAttribute', 'SetAttribute',
-    'LocalPlayer', 'Character', 'Humanoid', 'HumanoidRootPart', 'Parent', 'Name',
-    'Position', 'Enabled', 'Visible', 'Value', 'Text', 'Title', 'Duration', 'Icon',
-    'Callback', 'CurrentValue', 'Options', 'Range', 'Increment', 'Color',
+    'setclipboard', 'identifyexecutor', 'getexecutorname', 'gethiddenproperty',
+    'sethiddenproperty', 'gethui', 'getinstances', 'getnilinstances', 'fireclickdetector',
+    'getcustomasset', 'cloneref', 'compareinstances', 'loadfile', 'crypt', 'base64',
+    'lz4', 'cache', 'clonefunction', 'isexecutorclosure', 'getscriptclosure',
+    'getscripthash', 'getrunningscripts', 'getloadedmodules', 'isreadonly',
+    'setreadonly', 'getproperties', 'getsenv', 'getmenv', 'getfenv', 'setfenv',
+    'queue_on_teleport', 'isnetworkowner', 'getnamecallmethod', 'setnamecallmethod',
+    
+    // Special
+    '_G', '_VERSION', '_ENV', 'self', 'nil', 'true', 'false', 'shared',
 ]);
 
 export interface RenameMap { [original: string]: string; }
@@ -326,14 +336,29 @@ class NameGenerator {
 }
 
 // ============================================================================
-// IDENTIFIER ANALYSIS
+// IMPROVED IDENTIFIER ANALYSIS
 // ============================================================================
 
 function analyzeIdentifiers(tokens: Token[]): Set<string> {
     const localVars = new Set<string>();
+    const scopeStack: Set<string>[] = [new Set()];
+    
+    const currentScope = () => scopeStack[scopeStack.length - 1];
+    const isInAnyScope = (name: string) => scopeStack.some(s => s.has(name));
     
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
+        
+        // Track scope
+        if (t.type === TokenType.FUNCTION || t.type === TokenType.DO || 
+            t.type === TokenType.THEN || t.type === TokenType.ELSE ||
+            t.type === TokenType.REPEAT) {
+            scopeStack.push(new Set());
+        }
+        if (t.type === TokenType.END || t.type === TokenType.UNTIL) {
+            if (scopeStack.length > 1) scopeStack.pop();
+        }
+        
         if (t.type !== TokenType.IDENTIFIER) continue;
         if (RESERVED.has(t.value)) continue;
         
@@ -341,8 +366,10 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
         const prev2 = tokens[i - 2];
         const next = tokens[i + 1];
         
+        // Skip property access: obj.prop or obj:method
         if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) continue;
         
+        // Skip table keys in braces: { key = value }
         let braceDepth = 0;
         for (let j = 0; j < i; j++) {
             if (tokens[j].type === TokenType.LBRACE) braceDepth++;
@@ -352,19 +379,24 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
         
         let isLocal = false;
         
+        // Direct local declaration: local x
         if (prev && prev.type === TokenType.LOCAL) isLocal = true;
         
+        // Multiple local declaration: local a, b, c
         if (!isLocal && prev && prev.type === TokenType.COMMA) {
             for (let j = i - 1; j >= 0; j--) {
                 if (tokens[j].type === TokenType.LOCAL) { isLocal = true; break; }
-                if (tokens[j].type === TokenType.ASSIGN || tokens[j].line < t.line) break;
+                if (tokens[j].type === TokenType.ASSIGN || tokens[j].type === TokenType.IN) break;
+                if (tokens[j].line < t.line) break;
             }
         }
         
+        // Local function: local function name
         if (!isLocal && prev && prev.type === TokenType.FUNCTION && prev2 && prev2.type === TokenType.LOCAL) {
             isLocal = true;
         }
         
+        // Function parameter
         if (!isLocal) {
             let parenDepth = 0;
             for (let j = i - 1; j >= 0; j--) {
@@ -373,18 +405,27 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
                 if (tk.type === TokenType.LPAREN) {
                     parenDepth--;
                     if (parenDepth < 0) {
-                        for (let k = j - 1; k >= 0; k--) {
-                            if (tokens[k].type === TokenType.FUNCTION) { isLocal = true; break; }
-                            if (tokens[k].type === TokenType.RPAREN || tokens[k].type === TokenType.END) break;
-                        }
+                        if (j > 0 && tokens[j - 1].type === TokenType.FUNCTION) isLocal = true;
                         break;
                     }
                 }
-                if (tk.line < t.line - 1) break;
+                if (tk.type === TokenType.END || tk.type === TokenType.DO) break;
             }
         }
         
-        if (isLocal) localVars.add(t.value);
+        // For loop variables: for i, v in / for i = 
+        if (!isLocal) {
+            for (let j = i - 1; j >= 0; j--) {
+                if (tokens[j].type === TokenType.FOR) { isLocal = true; break; }
+                if (tokens[j].type === TokenType.DO || tokens[j].type === TokenType.END) break;
+                if (tokens[j].line < t.line) break;
+            }
+        }
+        
+        if (isLocal) {
+            localVars.add(t.value);
+            currentScope().add(t.value);
+        }
     }
     
     return localVars;
@@ -408,19 +449,30 @@ export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
     
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
-        if (t.type !== TokenType.IDENTIFIER || !map[t.value]) { result.push(t); continue; }
+        if (t.type !== TokenType.IDENTIFIER || !map[t.value]) { 
+            result.push(t); 
+            continue; 
+        }
         
         const prev = tokens[i - 1];
         const next = tokens[i + 1];
         
-        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) { result.push(t); continue; }
+        // Don't rename property access
+        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) { 
+            result.push(t); 
+            continue; 
+        }
         
+        // Don't rename table keys
         let braceDepth = 0;
         for (let j = 0; j < i; j++) {
             if (tokens[j].type === TokenType.LBRACE) braceDepth++;
             if (tokens[j].type === TokenType.RBRACE) braceDepth--;
         }
-        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) { result.push(t); continue; }
+        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) { 
+            result.push(t); 
+            continue; 
+        }
         
         result.push({ ...t, value: map[t.value], literal: map[t.value] });
     }
@@ -429,7 +481,7 @@ export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
 }
 
 // ============================================================================
-// STRING ENCRYPTION (XOR) - PHASE 2 [FIXED]
+// STRING ENCRYPTION (XOR) - PHASE 2 [IMPROVED]
 // ============================================================================
 
 export interface StringEncryptionResult {
@@ -439,29 +491,26 @@ export interface StringEncryptionResult {
 }
 
 function generateXorKey(): number {
-    // Key antara 1-127 agar hasil XOR tetap dalam range printable atau safe
-    return Math.floor(Math.random() * 126) + 1;
+    return Math.floor(Math.random() * 200) + 50; // 50-250
 }
 
 /**
- * FIXED: Menggunakan DECIMAL escape sequence, bukan octal!
- * Lua \ddd = DECIMAL (0-255), bukan octal
+ * XOR encrypt dengan HEX escape sequence (\xNN) - lebih reliable
  */
-function xorEncrypt(str: string, key: number): string {
+function xorEncryptHex(str: string, key: number): string {
     let result = '';
     for (let i = 0; i < str.length; i++) {
         const charCode = str.charCodeAt(i);
-        const encrypted = (charCode ^ key) & 0xFF; // Pastikan 0-255
-        // Gunakan decimal escape sequence (Lua standard)
-        result += '\\' + encrypted.toString(10);
+        const encrypted = (charCode ^ key) & 0xFF;
+        result += '\\x' + encrypted.toString(16).padStart(2, '0');
     }
     return result;
 }
 
 function generateObfuscatedName(prefix: string = ''): string {
     const chars = ['I', 'l'];
-    let name = prefix || '_';
-    for (let i = 0; i < 4; i++) {
+    let name = prefix;
+    for (let i = 0; i < 5; i++) {
         name += chars[Math.floor(Math.random() * 2)];
     }
     return name;
@@ -469,11 +518,11 @@ function generateObfuscatedName(prefix: string = ''): string {
 
 export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: StringEncryptionResult } {
     const encryptedStrings = new Map<string, { encrypted: string; key: number }>();
-    const decryptorName = generateObfuscatedName('_S');
+    const decryptorName = generateObfuscatedName('_');
     const globalKey = generateXorKey();
     
-    debug('ENCRYPT', `Using global XOR key: ${globalKey}`);
-    debug('ENCRYPT', `Decryptor function name: ${decryptorName}`);
+    debug('ENCRYPT', `Using XOR key: ${globalKey}`);
+    debug('ENCRYPT', `Decryptor: ${decryptorName}`);
     
     const result: Token[] = [];
     let stringCount = 0;
@@ -481,23 +530,22 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         
-        if (t.type === TokenType.STRING && t.literal && t.literal.length > 0) {
-            const original = t.literal as string;
+        // Encrypt ALL strings (no length skip)
+        if (t.type === TokenType.STRING && typeof t.literal === 'string') {
+            const original = t.literal;
             
-            // Skip string pendek
-            if (original.length <= 2) {
+            // Skip empty strings
+            if (original.length === 0) {
                 result.push(t);
                 continue;
             }
             
-            const encrypted = xorEncrypt(original, globalKey);
+            const encrypted = xorEncryptHex(original, globalKey);
             encryptedStrings.set(original, { encrypted, key: globalKey });
             
-            debug('ENCRYPT', `String encrypted`, { 
-                original: original.substring(0, 30) + (original.length > 30 ? '...' : ''),
-                length: original.length 
-            });
+            debug('ENCRYPT', `"${original.substring(0, 20)}${original.length > 20 ? '...' : ''}" encrypted`);
             
+            // Generate decryptor call: _Dec("encrypted", key)
             result.push({ type: TokenType.IDENTIFIER, value: decryptorName, line: t.line, column: t.column });
             result.push({ type: TokenType.LPAREN, value: '(', line: t.line, column: t.column });
             result.push({ type: TokenType.STRING, value: `"${encrypted}"`, literal: encrypted, line: t.line, column: t.column });
@@ -511,10 +559,10 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
         }
     }
     
-    debug('ENCRYPT', `Total strings encrypted: ${stringCount}`);
+    debug('ENCRYPT', `Total encrypted: ${stringCount}`);
     
-    // Decryptor yang kompatibel dengan Luau/Roblox
-    const decryptorCode = `local function ${decryptorName}(s,k) local r="" for i=1,#s do local c=string.byte(s,i) local x=bit32 and bit32.bxor or function(a,b) local p,c=1,0 while a>0 and b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a,b,p=(a-ra)/2,(b-rb)/2,p*2 end if a<b then a=b end while a>0 do local ra=a%2 if ra>0 then c=c+p end a,p=(a-ra)/2,p*2 end return c end r=r..string.char(x(c,k)) end return r end`;
+    // Robust decryptor - works in ALL Lua environments
+    const decryptorCode = `local ${decryptorName}=(function()local b=bit32 or bit local x=b and b.bxor or function(a,c)local r,p=0,1 while a>0 or c>0 do if a%2~=c%2 then r=r+p end a,c,p=math.floor(a/2),math.floor(c/2),p*2 end return r end return function(s,k)local o=""for i=1,#s do o=o..string.char(x(s:byte(i),k))end return o end end)()`;
     
     return {
         tokens: result,
@@ -551,138 +599,74 @@ class NumberObfuscator {
         this.config = { ...DEFAULT_NUMBER_CONFIG, ...config };
     }
     
-    obfuscateNumber(num: number, depth: number = 0): string {
-        // Handle special cases
+    obfuscateNumber(num: number): string {
         if (Number.isNaN(num)) return '(0/0)';
         if (num === Infinity) return '(1/0)';
         if (num === -Infinity) return '(-1/0)';
         
-        // Base case
-        if (depth >= this.config.maxDepth) {
-            return this.generateBaseExpression(num);
-        }
-        
         if (Number.isInteger(num)) {
-            return this.obfuscateInteger(num, depth);
-        } else {
-            return this.obfuscateFloat(num, depth);
+            return this.obfuscateInteger(num);
         }
+        return this.obfuscateFloat(num);
     }
     
-    private obfuscateInteger(num: number, depth: number): string {
+    private obfuscateInteger(num: number): string {
         const strategies: (() => string)[] = [];
         const absNum = Math.abs(num);
-        const sign = num < 0 ? '-' : '';
         
-        // Strategy 1: Addition decomposition
+        // Strategy 1: Simple arithmetic
         strategies.push(() => {
-            const a = Math.floor(Math.random() * 200) - 100;
+            const a = Math.floor(Math.random() * 500) + 100;
             const b = num - a;
-            return `(${a >= 0 ? a : '(' + a + ')'}+${b >= 0 ? b : '(' + b + ')'})`;
+            return `(${a}${b >= 0 ? '+' : ''}${b})`;
         });
         
         // Strategy 2: Subtraction
         strategies.push(() => {
-            const a = num + Math.floor(Math.random() * 200) + 50;
-            const b = a - num;
-            return `(${a}-${b})`;
+            const a = num + Math.floor(Math.random() * 500) + 100;
+            return `(${a}-${a - num})`;
         });
         
-        // Strategy 3: Multiplication (jika bisa difaktorkan)
-        if (absNum > 1 && absNum !== 0) {
-            const factors = this.findFactors(absNum);
-            if (factors.length > 0) {
-                strategies.push(() => {
-                    const [a, b] = factors[Math.floor(Math.random() * factors.length)];
-                    return `(${sign}${a}*${b})`;
-                });
+        // Strategy 3: Multiplication (if factorable)
+        if (absNum > 1) {
+            for (let f = 2; f <= Math.min(20, Math.sqrt(absNum)); f++) {
+                if (absNum % f === 0) {
+                    const sign = num < 0 ? '-' : '';
+                    strategies.push(() => `(${sign}${f}*${absNum / f})`);
+                    break;
+                }
             }
         }
         
-        // Strategy 4: Floor division
-        if (num !== 0) {
-            strategies.push(() => {
-                const mult = Math.floor(Math.random() * 10) + 2;
-                const dividend = num * mult;
-                return `(${dividend}//${mult})`;
-            });
-        }
-        
-        // Strategy 5: Bitwise XOR (untuk angka positif)
+        // Strategy 4: Bitwise XOR
         if (this.config.useBitwise && num >= 0 && num <= 0x7FFFFFFF) {
             strategies.push(() => {
                 const key = Math.floor(Math.random() * 0xFFF) + 1;
-                const encoded = num ^ key;
-                return `bit32.bxor(${encoded},${key})`;
+                return `bit32.bxor(${num ^ key},${key})`;
             });
         }
         
-        // Strategy 6: Bit shift (jika kelipatan 2)
-        if (this.config.useBitwise && num > 0 && num <= 0x7FFFFFFF) {
-            const shift = Math.floor(Math.log2(num));
-            if (shift > 0 && (1 << shift) === num) {
-                strategies.push(() => `bit32.lshift(1,${shift})`);
-            }
+        // Strategy 5: Floor division
+        if (num !== 0) {
+            strategies.push(() => {
+                const m = Math.floor(Math.random() * 10) + 2;
+                return `(${num * m}//${m})`;
+            });
         }
         
-        // Strategy 7: Hex representation
-        if (absNum > 9) {
-            strategies.push(() => `${sign}0x${absNum.toString(16).toUpperCase()}`);
+        // Strategy 6: Hex
+        if (absNum > 15) {
+            strategies.push(() => `${num < 0 ? '-' : ''}0x${absNum.toString(16).toUpperCase()}`);
         }
         
-        // Strategy 8: String length trick
-        if (num >= 0 && num <= 20) {
-            strategies.push(() => `#"${'a'.repeat(num)}"`);
-        }
-        
-        const strategy = strategies[Math.floor(Math.random() * strategies.length)];
-        return strategy();
+        return strategies[Math.floor(Math.random() * strategies.length)]();
     }
     
-    private obfuscateFloat(num: number, depth: number): string {
-        const strategies: (() => string)[] = [];
-        
-        // Strategy 1: Fraction
-        strategies.push(() => {
-            const precision = Math.pow(10, 6);
-            const numerator = Math.round(num * precision);
-            const denominator = precision;
-            const gcd = this.gcd(Math.abs(numerator), denominator);
-            return `(${numerator / gcd}/${denominator / gcd})`;
-        });
-        
-        // Strategy 2: Integer + decimal
-        strategies.push(() => {
-            const intPart = Math.floor(num);
-            const decPart = num - intPart;
-            const mult = 1000;
-            const decInt = Math.round(decPart * mult);
-            return `(${intPart}+${decInt}/${mult})`;
-        });
-        
-        const strategy = strategies[Math.floor(Math.random() * strategies.length)];
-        return strategy();
-    }
-    
-    private generateBaseExpression(num: number): string {
-        if (num === 0) {
-            const exprs = ['(1-1)', '(0*1)', '#""'];
-            return exprs[Math.floor(Math.random() * exprs.length)];
-        }
-        if (num === 1) {
-            const exprs = ['(2-1)', '#"a"', '(1^0)'];
-            return exprs[Math.floor(Math.random() * exprs.length)];
-        }
-        return num.toString();
-    }
-    
-    private findFactors(n: number): [number, number][] {
-        const factors: [number, number][] = [];
-        const sqrt = Math.sqrt(n);
-        for (let i = 2; i <= sqrt && i < 50; i++) {
-            if (n % i === 0) factors.push([i, n / i]);
-        }
-        return factors;
+    private obfuscateFloat(num: number): string {
+        const precision = 1000000;
+        const numerator = Math.round(num * precision);
+        const gcd = this.gcd(Math.abs(numerator), precision);
+        return `(${numerator / gcd}/${precision / gcd})`;
     }
     
     private gcd(a: number, b: number): number {
@@ -704,99 +688,82 @@ export function obfuscateNumbers(
         if (t.type === TokenType.NUMBER && typeof t.literal === 'number') {
             const num = t.literal;
             
-            // Skip angka di konteks tertentu
-            if (shouldSkipNumber(tokens, i, num)) {
+            // Skip numbers in for loops completely
+            let inForLoop = false;
+            for (let j = i - 1; j >= Math.max(0, i - 15); j--) {
+                if (tokens[j].type === TokenType.FOR) { inForLoop = true; break; }
+                if (tokens[j].type === TokenType.DO) break;
+            }
+            
+            if (inForLoop) {
+                result.push(t);
+                continue;
+            }
+            
+            // Skip simple array indices [1], [2], etc.
+            const prev = tokens[i - 1];
+            if (prev && prev.type === TokenType.LBRACKET && num >= 1 && num <= 10 && Number.isInteger(num)) {
                 result.push(t);
                 continue;
             }
             
             const obfuscated = obfuscator.obfuscateNumber(num);
-            debug('NUMBER', `${num} → ${obfuscated}`);
-            
             const exprTokens = expressionToTokens(obfuscated, t.line, t.column);
             result.push(...exprTokens);
-            
             numbersObfuscated++;
         } else {
             result.push(t);
         }
     }
     
-    debug('NUMBER', `Total numbers obfuscated: ${numbersObfuscated}`);
-    
+    debug('NUMBER', `Obfuscated: ${numbersObfuscated}`);
     return { tokens: result, numbersObfuscated };
-}
-
-function shouldSkipNumber(tokens: Token[], index: number, num: number): boolean {
-    // Skip dalam for loop
-    for (let j = index - 1; j >= 0 && j > index - 8; j--) {
-        if (tokens[j].type === TokenType.FOR) return true;
-        if (tokens[j].type === TokenType.DO || tokens[j].type === TokenType.END) break;
-    }
-    
-    // Skip index sederhana
-    const prev = tokens[index - 1];
-    if (prev && prev.type === TokenType.LBRACKET && num >= 1 && num <= 5) {
-        return true;
-    }
-    
-    return false;
 }
 
 function expressionToTokens(expr: string, line: number, column: number): Token[] {
     const result: Token[] = [];
     let i = 0;
     
+    const addTok = (type: TokenType, value: string, literal?: any) => {
+        result.push({ type, value, literal: literal !== undefined ? literal : value, line, column });
+    };
+    
     while (i < expr.length) {
         const c = expr[i];
-        
         if (c === ' ') { i++; continue; }
         
-        if (c === '(') { result.push({ type: TokenType.LPAREN, value: '(', line, column }); i++; }
-        else if (c === ')') { result.push({ type: TokenType.RPAREN, value: ')', line, column }); i++; }
-        else if (c === '+') { result.push({ type: TokenType.PLUS, value: '+', line, column }); i++; }
-        else if (c === '*') { result.push({ type: TokenType.STAR, value: '*', line, column }); i++; }
-        else if (c === '%') { result.push({ type: TokenType.PERCENT, value: '%', line, column }); i++; }
-        else if (c === '^') { result.push({ type: TokenType.CARET, value: '^', line, column }); i++; }
-        else if (c === ',') { result.push({ type: TokenType.COMMA, value: ',', line, column }); i++; }
-        else if (c === '.') { result.push({ type: TokenType.DOT, value: '.', line, column }); i++; }
-        else if (c === '#') { result.push({ type: TokenType.HASH, value: '#', line, column }); i++; }
-        else if (c === '-') { result.push({ type: TokenType.MINUS, value: '-', line, column }); i++; }
-        else if (c === '/') {
-            if (expr[i + 1] === '/') {
-                result.push({ type: TokenType.DOUBLE_SLASH, value: '//', line, column });
-                i += 2;
-            } else {
-                result.push({ type: TokenType.SLASH, value: '/', line, column });
-                i++;
-            }
+        switch (c) {
+            case '(': addTok(TokenType.LPAREN, '('); i++; break;
+            case ')': addTok(TokenType.RPAREN, ')'); i++; break;
+            case '+': addTok(TokenType.PLUS, '+'); i++; break;
+            case '*': addTok(TokenType.STAR, '*'); i++; break;
+            case '%': addTok(TokenType.PERCENT, '%'); i++; break;
+            case '^': addTok(TokenType.CARET, '^'); i++; break;
+            case ',': addTok(TokenType.COMMA, ','); i++; break;
+            case '.': addTok(TokenType.DOT, '.'); i++; break;
+            case '#': addTok(TokenType.HASH, '#'); i++; break;
+            case '-': addTok(TokenType.MINUS, '-'); i++; break;
+            case '/':
+                if (expr[i + 1] === '/') { addTok(TokenType.DOUBLE_SLASH, '//'); i += 2; }
+                else { addTok(TokenType.SLASH, '/'); i++; }
+                break;
+            default:
+                if (/[0-9]/.test(c)) {
+                    let numStr = '';
+                    if (c === '0' && expr[i + 1]?.toLowerCase() === 'x') {
+                        numStr = '0x'; i += 2;
+                        while (i < expr.length && /[0-9a-fA-F]/.test(expr[i])) { numStr += expr[i++]; }
+                        addTok(TokenType.NUMBER, numStr, parseInt(numStr, 16));
+                    } else {
+                        while (i < expr.length && /[0-9.]/.test(expr[i])) { numStr += expr[i++]; }
+                        addTok(TokenType.NUMBER, numStr, parseFloat(numStr));
+                    }
+                } else if (/[a-zA-Z_]/.test(c)) {
+                    let ident = '';
+                    while (i < expr.length && /[a-zA-Z0-9_]/.test(expr[i])) { ident += expr[i++]; }
+                    addTok(TokenType.IDENTIFIER, ident);
+                } else { i++; }
         }
-        else if (c === '"') {
-            let str = '"';
-            i++;
-            while (i < expr.length && expr[i] !== '"') { str += expr[i]; i++; }
-            str += '"';
-            i++;
-            result.push({ type: TokenType.STRING, value: str, literal: str.slice(1, -1), line, column });
-        }
-        else if (/[0-9]/.test(c) || (c === '0' && expr[i + 1] === 'x')) {
-            let numStr = '';
-            if (c === '0' && expr[i + 1] === 'x') {
-                numStr = '0x';
-                i += 2;
-                while (i < expr.length && /[0-9a-fA-F]/.test(expr[i])) { numStr += expr[i]; i++; }
-                result.push({ type: TokenType.NUMBER, value: numStr, literal: parseInt(numStr, 16), line, column });
-            } else {
-                while (i < expr.length && /[0-9.]/.test(expr[i])) { numStr += expr[i]; i++; }
-                result.push({ type: TokenType.NUMBER, value: numStr, literal: parseFloat(numStr), line, column });
-            }
-        }
-        else if (/[a-zA-Z_]/.test(c)) {
-            let ident = '';
-            while (i < expr.length && /[a-zA-Z0-9_]/.test(expr[i])) { ident += expr[i]; i++; }
-            result.push({ type: TokenType.IDENTIFIER, value: ident, literal: ident, line, column });
-        }
-        else { i++; }
     }
     
     return result;
@@ -828,12 +795,12 @@ const SPACE_BEFORE = new Set([
 ]);
 
 const NO_SPACE_AFTER = new Set([
-    TokenType.LPAREN, TokenType.LBRACE, TokenType.LBRACKET, 
+    TokenType.LPAREN, TokenType.LBRACE, TokenType.LBRACKET,
     TokenType.DOT, TokenType.COLON, TokenType.HASH, TokenType.NOT
 ]);
 
 const NO_SPACE_BEFORE = new Set([
-    TokenType.RPAREN, TokenType.RBRACE, TokenType.RBRACKET, 
+    TokenType.RPAREN, TokenType.RBRACE, TokenType.RBRACKET,
     TokenType.DOT, TokenType.COLON, TokenType.COMMA, TokenType.SEMICOLON,
     TokenType.LPAREN, TokenType.LBRACKET
 ]);
@@ -847,23 +814,23 @@ export function tokensToCode(tokens: Token[], prependCode: string = ''): string 
         if (t.type === TokenType.EOF) continue;
         
         if (prev && prev.type !== TokenType.EOF) {
-            const needsSpace = !NO_SPACE_AFTER.has(prev.type) && 
+            const needsSpace = !NO_SPACE_AFTER.has(prev.type) &&
                                !NO_SPACE_BEFORE.has(t.type) &&
                                (SPACE_AFTER.has(prev.type) || SPACE_BEFORE.has(t.type));
             if (needsSpace) code += ' ';
         }
         
         if (t.type === TokenType.STRING) {
-            if (t.value.startsWith('"') && t.value.endsWith('"')) {
+            if (t.value.startsWith('"') || t.value.startsWith("'")) {
                 code += t.value;
             } else {
-                const esc = (t.literal || '')
+                const escaped = (t.literal ?? '')
                     .replace(/\\/g, '\\\\')
                     .replace(/"/g, '\\"')
                     .replace(/\n/g, '\\n')
                     .replace(/\r/g, '\\r')
                     .replace(/\t/g, '\\t');
-                code += '"' + esc + '"';
+                code += '"' + escaped + '"';
             }
         } else {
             code += t.value;
@@ -912,22 +879,20 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
     };
     
     enableDebug(opts.debug);
-    debug('MAIN', 'Starting obfuscation v0.3.1', { options: opts });
+    debug('MAIN', 'Nephilim v0.3.2 starting', opts);
     
-    // Step 1: Tokenize
     let tokens = tokenize(source);
     const originalTokenCount = tokens.length;
-    debug('MAIN', 'Tokenization complete', { tokenCount: tokens.length });
     
-    // Step 2: Rename variables
+    // Phase 1: Rename variables
     let renameMap: RenameMap = {};
     if (opts.renameVariables) {
         renameMap = createRenameMap(tokens);
         tokens = applyRenameMap(tokens, renameMap);
-        debug('MAIN', 'Renaming complete', { renamed: Object.keys(renameMap).length });
+        debug('MAIN', `Renamed ${Object.keys(renameMap).length} identifiers`);
     }
     
-    // Step 3: Encrypt strings
+    // Phase 2: Encrypt strings
     let stringsEncrypted = 0;
     let prependCode = '';
     if (opts.encryptStrings) {
@@ -935,30 +900,27 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
         tokens = encResult.tokens;
         prependCode = encResult.encryption.decryptorCode;
         stringsEncrypted = encResult.encryption.encryptedStrings.size;
-        debug('MAIN', 'String encryption complete', { encrypted: stringsEncrypted });
+        debug('MAIN', `Encrypted ${stringsEncrypted} strings`);
     }
     
-    // Step 4: Obfuscate numbers
+    // Phase 3: Obfuscate numbers
     let numbersObfuscated = 0;
     if (opts.obfuscateNumbers) {
         const numResult = obfuscateNumbers(tokens, {
             complexity: opts.numberComplexity,
             useBitwise: true,
             useMathFunctions: true,
-            maxDepth: opts.numberComplexity === 'high' ? 3 : opts.numberComplexity === 'medium' ? 2 : 1
+            maxDepth: 2
         });
         tokens = numResult.tokens;
         numbersObfuscated = numResult.numbersObfuscated;
-        debug('MAIN', 'Number obfuscation complete', { obfuscated: numbersObfuscated });
+        debug('MAIN', `Obfuscated ${numbersObfuscated} numbers`);
     }
     
-    // Step 5: Generate code
     const code = tokensToCode(tokens, prependCode);
-    
     const endTime = Date.now();
-    debug('MAIN', 'Obfuscation complete', { timeMs: endTime - startTime });
     
-    const result: ObfuscateResult = {
+    return {
         code,
         map: renameMap,
         stats: {
@@ -969,12 +931,9 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
             originalLength: source.length,
             outputLength: code.length,
             timeMs: endTime - startTime
-        }
+        },
+        debugLogs: opts.debug ? getDebugLogs() : undefined
     };
-    
-    if (opts.debug) result.debugLogs = getDebugLogs();
-    
-    return result;
 }
 
 export default { obfuscate, tokenize, enableDebug, getDebugLogs };
