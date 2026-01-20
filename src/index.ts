@@ -1,5 +1,5 @@
 import express from 'express';
-import { tokenize, obfuscate, TokenType } from './lexer';
+import { obfuscate } from './lexer';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -45,70 +45,35 @@ end
 
 LH()`;
 
-console.log("\n");
-console.log("╔════════════════════════════════════════════════════════════╗");
-console.log("║       NEPHILIM OBFUSCATOR v0.1.1 (BUG FIXED)               ║");
-console.log("║       PHASE 1: SMART RENAMER                               ║");
-console.log("╚════════════════════════════════════════════════════════════╝");
+console.log("\n╔════════════════════════════════════════════════════════════╗");
+console.log("║       NEPHILIM OBFUSCATOR v0.1.2 - ALL BUGS FIXED          ║");
+console.log("╚════════════════════════════════════════════════════════════╝\n");
 
 try {
-    const startTime = Date.now();
     const result = obfuscate(testScript);
-    const endTime = Date.now();
     
-    console.log("\n┌─────────────────────────────────────────────────────────────┐");
-    console.log("│ OBFUSCATION STATS                                          │");
-    console.log("└─────────────────────────────────────────────────────────────┘");
-    console.log(`  ⏱  Time          : ${endTime - startTime}ms`);
-    console.log(`  📊 Tokens        : ${result.stats.originalTokens}`);
-    console.log(`  🔄 Vars Renamed  : ${result.stats.identifiersRenamed}`);
-    console.log(`  📝 Original      : ${result.stats.originalLength} chars`);
-    console.log(`  📦 Output        : ${result.stats.outputLength} chars\n`);
+    console.log("📊 STATS:");
+    console.log(`   Tokens: ${result.stats.originalTokens} | Renamed: ${result.stats.identifiersRenamed}`);
+    console.log(`   Size: ${result.stats.originalLength} → ${result.stats.outputLength} chars\n`);
     
-    console.log("┌─────────────────────────────────────────────────────────────┐");
-    console.log("│ RENAME MAPPING (Local vars only - NO table keys!)          │");
-    console.log("└─────────────────────────────────────────────────────────────┘");
-    Object.entries(result.map).forEach(([orig, obf]) => {
-        console.log(`  ${orig.padEnd(15)} → ${obf}`);
-    });
+    console.log("🔄 RENAME MAP:");
+    Object.entries(result.map).forEach(([o, n]) => console.log(`   ${o.padEnd(12)} → ${n}`));
     
-    console.log("\n┌─────────────────────────────────────────────────────────────┐");
-    console.log("│ OBFUSCATED OUTPUT                                          │");
-    console.log("└─────────────────────────────────────────────────────────────┘");
+    console.log("\n📜 OUTPUT:\n" + "─".repeat(60));
     console.log(result.code);
+    console.log("─".repeat(60));
     
-    console.log("\n╔════════════════════════════════════════════════════════════╗");
-    console.log("║  ✅ PHASE 1 COMPLETE - Table keys preserved!               ║");
-    console.log("╚════════════════════════════════════════════════════════════╝\n");
+    console.log("\n✅ SUCCESS! Function names & params now renamed!");
 
-} catch (e) {
-    console.error("❌ ERROR:", e);
-}
+} catch (e) { console.error("❌ ERROR:", e); }
 
 app.use(express.json({ limit: '10mb' }));
-
-app.get('/', (req, res) => {
-    res.json({
-        name: 'Nephilim Obfuscator',
-        version: '0.1.1',
-        status: 'online',
-        phase: 'Phase 1 - Smart Renamer'
-    });
-});
-
+app.get('/', (_, res) => res.json({ name: 'Nephilim', version: '0.1.2', status: 'online' }));
 app.post('/obfuscate', (req, res) => {
     try {
         const { code } = req.body;
-        if (!code) {
-            return res.status(400).json({ error: 'No code provided' });
-        }
-        const result = obfuscate(code);
-        res.json({ success: true, obfuscated: result.code, stats: result.stats });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
+        if (!code) return res.status(400).json({ error: 'No code' });
+        res.json({ success: true, ...obfuscate(code) });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
-
-app.listen(port, () => {
-    console.log(`🚀 Nephilim API running on port ${port}`);
-});
+app.listen(port, () => console.log(`\n🚀 Server on port ${port}`));
