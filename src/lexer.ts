@@ -1,5 +1,5 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR v0.3.2 - PHASE 3: FIXED STRING & NUMBER OBFUSCATION
+// NEPHILIM OBFUSCATOR v0.3.3 - PHASE 3: CRITICAL BUG FIXES
 // ============================================================================
 
 export enum TokenType {
@@ -265,28 +265,20 @@ export class Lexer {
 export function tokenize(source: string): Token[] { return new Lexer(source).tokenize(); }
 
 // ============================================================================
-// RESERVED GLOBALS - EXPANDED
+// RESERVED GLOBALS
 // ============================================================================
 
 const RESERVED = new Set([
-    // Lua globals
     'print', 'type', 'tostring', 'tonumber', 'pairs', 'ipairs', 'next', 'select',
     'unpack', 'pcall', 'xpcall', 'error', 'assert', 'setmetatable', 'getmetatable',
     'rawget', 'rawset', 'rawequal', 'loadstring', 'load', 'dofile', 'require',
     'collectgarbage', 'setfenv', 'getfenv', 'math', 'string', 'table', 'os', 'io',
     'coroutine', 'debug', 'bit32', 'bit', 'utf8', 'package',
-    
-    // Roblox globals
     'game', 'workspace', 'script', 'plugin', 'wait', 'spawn', 'delay', 'tick',
     'time', 'elapsedTime', 'warn', 'typeof', 'task', 'version', 'settings',
     'Instance', 'Vector3', 'Vector2', 'CFrame', 'Color3', 'UDim', 'UDim2', 'Enum',
     'Ray', 'Region3', 'Rect', 'BrickColor', 'TweenInfo', 'NumberSequence',
     'ColorSequence', 'NumberRange', 'PhysicalProperties', 'Random', 'Axes', 'Faces',
-    'PathWaypoint', 'OverlapParams', 'RaycastParams', 'DockWidgetPluginGuiInfo',
-    'FloatCurveKey', 'RotationCurveKey', 'Font', 'NumberSequenceKeypoint',
-    'ColorSequenceKeypoint', 'RBXScriptConnection', 'RBXScriptSignal',
-    
-    // Executor globals
     'getgenv', 'getrenv', 'getrawmetatable', 'setrawmetatable', 'hookfunction',
     'hookmetamethod', 'newcclosure', 'islclosure', 'iscclosure', 'checkcaller',
     'getinfo', 'getupvalue', 'setupvalue', 'getconstant', 'setconstant',
@@ -294,14 +286,7 @@ const RESERVED = new Set([
     'Drawing', 'request', 'http_request', 'HttpGet', 'HttpPost', 'readfile',
     'writefile', 'appendfile', 'isfile', 'isfolder', 'makefolder', 'listfiles',
     'setclipboard', 'identifyexecutor', 'getexecutorname', 'gethiddenproperty',
-    'sethiddenproperty', 'gethui', 'getinstances', 'getnilinstances', 'fireclickdetector',
-    'getcustomasset', 'cloneref', 'compareinstances', 'loadfile', 'crypt', 'base64',
-    'lz4', 'cache', 'clonefunction', 'isexecutorclosure', 'getscriptclosure',
-    'getscripthash', 'getrunningscripts', 'getloadedmodules', 'isreadonly',
-    'setreadonly', 'getproperties', 'getsenv', 'getmenv', 'getfenv', 'setfenv',
-    'queue_on_teleport', 'isnetworkowner', 'getnamecallmethod', 'setnamecallmethod',
-    
-    // Special
+    'sethiddenproperty', 'gethui', 'getinstances', 'getnilinstances',
     '_G', '_VERSION', '_ENV', 'self', 'nil', 'true', 'false', 'shared',
 ]);
 
@@ -336,95 +321,126 @@ class NameGenerator {
 }
 
 // ============================================================================
-// IMPROVED IDENTIFIER ANALYSIS
+// HELPER: Check if token is inside table literal as a KEY
+// ============================================================================
+
+function isTableKey(tokens: Token[], index: number): boolean {
+    const next = tokens[index + 1];
+    
+    // Must be followed by = (but not ==)
+    if (!next || next.type !== TokenType.ASSIGN) return false;
+    
+    // Look backwards to find matching { without hitting }
+    let braceDepth = 0;
+    for (let j = index - 1; j >= 0; j--) {
+        const t = tokens[j];
+        
+        if (t.type === TokenType.RBRACE) {
+            braceDepth++;
+        } else if (t.type === TokenType.LBRACE) {
+            if (braceDepth === 0) {
+                // Found opening brace - this IS a table key
+                return true;
+            }
+            braceDepth--;
+        } else if (t.type === TokenType.SEMICOLON) {
+            // Statement separator - not inside table
+            return false;
+        } else if (t.type === TokenType.THEN || t.type === TokenType.DO || 
+                   t.type === TokenType.ELSE || t.type === TokenType.FUNCTION ||
+                   t.type === TokenType.REPEAT) {
+            // Control structure - not inside table (unless nested)
+            if (braceDepth === 0) return false;
+        }
+    }
+    
+    return false;
+}
+
+// ============================================================================
+// IDENTIFIER ANALYSIS - FIXED
 // ============================================================================
 
 function analyzeIdentifiers(tokens: Token[]): Set<string> {
     const localVars = new Set<string>();
-    const scopeStack: Set<string>[] = [new Set()];
-    
-    const currentScope = () => scopeStack[scopeStack.length - 1];
-    const isInAnyScope = (name: string) => scopeStack.some(s => s.has(name));
     
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
-        
-        // Track scope
-        if (t.type === TokenType.FUNCTION || t.type === TokenType.DO || 
-            t.type === TokenType.THEN || t.type === TokenType.ELSE ||
-            t.type === TokenType.REPEAT) {
-            scopeStack.push(new Set());
-        }
-        if (t.type === TokenType.END || t.type === TokenType.UNTIL) {
-            if (scopeStack.length > 1) scopeStack.pop();
-        }
-        
         if (t.type !== TokenType.IDENTIFIER) continue;
         if (RESERVED.has(t.value)) continue;
         
         const prev = tokens[i - 1];
         const prev2 = tokens[i - 2];
-        const next = tokens[i + 1];
         
         // Skip property access: obj.prop or obj:method
         if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) continue;
         
-        // Skip table keys in braces: { key = value }
-        let braceDepth = 0;
-        for (let j = 0; j < i; j++) {
-            if (tokens[j].type === TokenType.LBRACE) braceDepth++;
-            if (tokens[j].type === TokenType.RBRACE) braceDepth--;
-        }
-        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) continue;
+        // Skip table keys: { key = val }
+        if (isTableKey(tokens, i)) continue;
         
         let isLocal = false;
         
-        // Direct local declaration: local x
-        if (prev && prev.type === TokenType.LOCAL) isLocal = true;
-        
-        // Multiple local declaration: local a, b, c
-        if (!isLocal && prev && prev.type === TokenType.COMMA) {
-            for (let j = i - 1; j >= 0; j--) {
-                if (tokens[j].type === TokenType.LOCAL) { isLocal = true; break; }
-                if (tokens[j].type === TokenType.ASSIGN || tokens[j].type === TokenType.IN) break;
-                if (tokens[j].line < t.line) break;
-            }
-        }
-        
-        // Local function: local function name
-        if (!isLocal && prev && prev.type === TokenType.FUNCTION && prev2 && prev2.type === TokenType.LOCAL) {
+        // 1. Direct local declaration: local x
+        if (prev && prev.type === TokenType.LOCAL) {
             isLocal = true;
         }
         
-        // Function parameter
+        // 2. Multiple local declaration: local a, b, c
+        if (!isLocal && prev && prev.type === TokenType.COMMA) {
+            for (let j = i - 1; j >= 0; j--) {
+                const tk = tokens[j];
+                if (tk.type === TokenType.LOCAL) { isLocal = true; break; }
+                if (tk.type === TokenType.ASSIGN || tk.type === TokenType.IN ||
+                    tk.type === TokenType.SEMICOLON || tk.type === TokenType.END ||
+                    tk.type === TokenType.DO || tk.type === TokenType.THEN) break;
+            }
+        }
+        
+        // 3. Local function: local function name()
+        if (!isLocal && prev && prev.type === TokenType.FUNCTION) {
+            if (prev2 && prev2.type === TokenType.LOCAL) {
+                isLocal = true;
+            }
+        }
+        
+        // 4. Function parameter: function(a, b, c)
         if (!isLocal) {
             let parenDepth = 0;
             for (let j = i - 1; j >= 0; j--) {
                 const tk = tokens[j];
                 if (tk.type === TokenType.RPAREN) parenDepth++;
-                if (tk.type === TokenType.LPAREN) {
+                else if (tk.type === TokenType.LPAREN) {
                     parenDepth--;
                     if (parenDepth < 0) {
-                        if (j > 0 && tokens[j - 1].type === TokenType.FUNCTION) isLocal = true;
+                        // Check if this paren belongs to function definition
+                        if (j > 0 && tokens[j - 1].type === TokenType.FUNCTION) {
+                            isLocal = true;
+                        } else if (j > 1 && tokens[j - 1].type === TokenType.IDENTIFIER && 
+                                   tokens[j - 2].type === TokenType.FUNCTION) {
+                            isLocal = true;
+                        }
                         break;
                     }
+                } else if (tk.type === TokenType.END || tk.type === TokenType.DO ||
+                           tk.type === TokenType.THEN || tk.type === TokenType.SEMICOLON) {
+                    break;
                 }
-                if (tk.type === TokenType.END || tk.type === TokenType.DO) break;
             }
         }
         
-        // For loop variables: for i, v in / for i = 
+        // 5. For loop variables: for i = 1, 10 or for k, v in pairs()
         if (!isLocal) {
             for (let j = i - 1; j >= 0; j--) {
-                if (tokens[j].type === TokenType.FOR) { isLocal = true; break; }
-                if (tokens[j].type === TokenType.DO || tokens[j].type === TokenType.END) break;
-                if (tokens[j].line < t.line) break;
+                const tk = tokens[j];
+                if (tk.type === TokenType.FOR) { isLocal = true; break; }
+                if (tk.type === TokenType.DO || tk.type === TokenType.END ||
+                    tk.type === TokenType.SEMICOLON || tk.type === TokenType.THEN) break;
             }
         }
         
         if (isLocal) {
             localVars.add(t.value);
-            currentScope().add(t.value);
+            debug('ANALYZE', `Found local: ${t.value}`);
         }
     }
     
@@ -444,36 +460,38 @@ export function createRenameMap(tokens: Token[]): RenameMap {
     return map;
 }
 
+// ============================================================================
+// APPLY RENAME - FIXED
+// ============================================================================
+
 export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
     const result: Token[] = [];
     
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
-        if (t.type !== TokenType.IDENTIFIER || !map[t.value]) { 
-            result.push(t); 
-            continue; 
+        
+        // Not an identifier or not in map - keep as is
+        if (t.type !== TokenType.IDENTIFIER || !map[t.value]) {
+            result.push(t);
+            continue;
         }
         
         const prev = tokens[i - 1];
-        const next = tokens[i + 1];
         
-        // Don't rename property access
-        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) { 
-            result.push(t); 
-            continue; 
+        // Skip property access: obj.prop or obj:method
+        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) {
+            result.push(t);
+            continue;
         }
         
-        // Don't rename table keys
-        let braceDepth = 0;
-        for (let j = 0; j < i; j++) {
-            if (tokens[j].type === TokenType.LBRACE) braceDepth++;
-            if (tokens[j].type === TokenType.RBRACE) braceDepth--;
-        }
-        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) { 
-            result.push(t); 
-            continue; 
+        // Skip table keys: { key = value }
+        // FIXED: Use proper detection instead of braceDepth
+        if (isTableKey(tokens, i)) {
+            result.push(t);
+            continue;
         }
         
+        // Rename this identifier
         result.push({ ...t, value: map[t.value], literal: map[t.value] });
     }
     
@@ -481,7 +499,7 @@ export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
 }
 
 // ============================================================================
-// STRING ENCRYPTION (XOR) - PHASE 2 [IMPROVED]
+// STRING ENCRYPTION (XOR) - FIXED
 // ============================================================================
 
 export interface StringEncryptionResult {
@@ -491,12 +509,9 @@ export interface StringEncryptionResult {
 }
 
 function generateXorKey(): number {
-    return Math.floor(Math.random() * 200) + 50; // 50-250
+    return Math.floor(Math.random() * 200) + 50;
 }
 
-/**
- * XOR encrypt dengan HEX escape sequence (\xNN) - lebih reliable
- */
 function xorEncryptHex(str: string, key: number): string {
     let result = '';
     for (let i = 0; i < str.length; i++) {
@@ -521,8 +536,7 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     const decryptorName = generateObfuscatedName('_');
     const globalKey = generateXorKey();
     
-    debug('ENCRYPT', `Using XOR key: ${globalKey}`);
-    debug('ENCRYPT', `Decryptor: ${decryptorName}`);
+    debug('ENCRYPT', `XOR key: ${globalKey}, Decryptor: ${decryptorName}`);
     
     const result: Token[] = [];
     let stringCount = 0;
@@ -530,22 +544,11 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         
-        // Encrypt ALL strings (no length skip)
-        if (t.type === TokenType.STRING && typeof t.literal === 'string') {
+        if (t.type === TokenType.STRING && typeof t.literal === 'string' && t.literal.length > 0) {
             const original = t.literal;
-            
-            // Skip empty strings
-            if (original.length === 0) {
-                result.push(t);
-                continue;
-            }
-            
             const encrypted = xorEncryptHex(original, globalKey);
             encryptedStrings.set(original, { encrypted, key: globalKey });
             
-            debug('ENCRYPT', `"${original.substring(0, 20)}${original.length > 20 ? '...' : ''}" encrypted`);
-            
-            // Generate decryptor call: _Dec("encrypted", key)
             result.push({ type: TokenType.IDENTIFIER, value: decryptorName, line: t.line, column: t.column });
             result.push({ type: TokenType.LPAREN, value: '(', line: t.line, column: t.column });
             result.push({ type: TokenType.STRING, value: `"${encrypted}"`, literal: encrypted, line: t.line, column: t.column });
@@ -559,18 +562,14 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
         }
     }
     
-    debug('ENCRYPT', `Total encrypted: ${stringCount}`);
+    debug('ENCRYPT', `Encrypted ${stringCount} strings`);
     
-    // Robust decryptor - works in ALL Lua environments
+    // Universal decryptor
     const decryptorCode = `local ${decryptorName}=(function()local b=bit32 or bit local x=b and b.bxor or function(a,c)local r,p=0,1 while a>0 or c>0 do if a%2~=c%2 then r=r+p end a,c,p=math.floor(a/2),math.floor(c/2),p*2 end return r end return function(s,k)local o=""for i=1,#s do o=o..string.char(x(s:byte(i),k))end return o end end)()`;
     
     return {
         tokens: result,
-        encryption: {
-            encryptedStrings,
-            decryptorName,
-            decryptorCode
-        }
+        encryption: { encryptedStrings, decryptorName, decryptorCode }
     };
 }
 
@@ -585,28 +584,13 @@ export interface NumberObfuscationConfig {
     maxDepth: number;
 }
 
-const DEFAULT_NUMBER_CONFIG: NumberObfuscationConfig = {
-    complexity: 'medium',
-    useBitwise: true,
-    useMathFunctions: true,
-    maxDepth: 2
-};
-
 class NumberObfuscator {
-    private config: NumberObfuscationConfig;
-    
-    constructor(config: Partial<NumberObfuscationConfig> = {}) {
-        this.config = { ...DEFAULT_NUMBER_CONFIG, ...config };
-    }
-    
     obfuscateNumber(num: number): string {
         if (Number.isNaN(num)) return '(0/0)';
         if (num === Infinity) return '(1/0)';
         if (num === -Infinity) return '(-1/0)';
         
-        if (Number.isInteger(num)) {
-            return this.obfuscateInteger(num);
-        }
+        if (Number.isInteger(num)) return this.obfuscateInteger(num);
         return this.obfuscateFloat(num);
     }
     
@@ -614,20 +598,20 @@ class NumberObfuscator {
         const strategies: (() => string)[] = [];
         const absNum = Math.abs(num);
         
-        // Strategy 1: Simple arithmetic
+        // Addition
         strategies.push(() => {
             const a = Math.floor(Math.random() * 500) + 100;
             const b = num - a;
             return `(${a}${b >= 0 ? '+' : ''}${b})`;
         });
         
-        // Strategy 2: Subtraction
+        // Subtraction
         strategies.push(() => {
             const a = num + Math.floor(Math.random() * 500) + 100;
             return `(${a}-${a - num})`;
         });
         
-        // Strategy 3: Multiplication (if factorable)
+        // Multiplication
         if (absNum > 1) {
             for (let f = 2; f <= Math.min(20, Math.sqrt(absNum)); f++) {
                 if (absNum % f === 0) {
@@ -638,23 +622,7 @@ class NumberObfuscator {
             }
         }
         
-        // Strategy 4: Bitwise XOR
-        if (this.config.useBitwise && num >= 0 && num <= 0x7FFFFFFF) {
-            strategies.push(() => {
-                const key = Math.floor(Math.random() * 0xFFF) + 1;
-                return `bit32.bxor(${num ^ key},${key})`;
-            });
-        }
-        
-        // Strategy 5: Floor division
-        if (num !== 0) {
-            strategies.push(() => {
-                const m = Math.floor(Math.random() * 10) + 2;
-                return `(${num * m}//${m})`;
-            });
-        }
-        
-        // Strategy 6: Hex
+        // Hex
         if (absNum > 15) {
             strategies.push(() => `${num < 0 ? '-' : ''}0x${absNum.toString(16).toUpperCase()}`);
         }
@@ -674,11 +642,8 @@ class NumberObfuscator {
     }
 }
 
-export function obfuscateNumbers(
-    tokens: Token[], 
-    config: Partial<NumberObfuscationConfig> = {}
-): { tokens: Token[]; numbersObfuscated: number } {
-    const obfuscator = new NumberObfuscator(config);
+export function obfuscateNumbers(tokens: Token[]): { tokens: Token[]; numbersObfuscated: number } {
+    const obfuscator = new NumberObfuscator();
     const result: Token[] = [];
     let numbersObfuscated = 0;
     
@@ -688,23 +653,18 @@ export function obfuscateNumbers(
         if (t.type === TokenType.NUMBER && typeof t.literal === 'number') {
             const num = t.literal;
             
-            // Skip numbers in for loops completely
+            // Skip for loops
             let inForLoop = false;
             for (let j = i - 1; j >= Math.max(0, i - 15); j--) {
                 if (tokens[j].type === TokenType.FOR) { inForLoop = true; break; }
                 if (tokens[j].type === TokenType.DO) break;
             }
+            if (inForLoop) { result.push(t); continue; }
             
-            if (inForLoop) {
-                result.push(t);
-                continue;
-            }
-            
-            // Skip simple array indices [1], [2], etc.
+            // Skip simple indices [1], [2], etc.
             const prev = tokens[i - 1];
-            if (prev && prev.type === TokenType.LBRACKET && num >= 1 && num <= 10 && Number.isInteger(num)) {
-                result.push(t);
-                continue;
+            if (prev?.type === TokenType.LBRACKET && num >= 1 && num <= 10 && Number.isInteger(num)) {
+                result.push(t); continue;
             }
             
             const obfuscated = obfuscator.obfuscateNumber(num);
@@ -716,7 +676,6 @@ export function obfuscateNumbers(
         }
     }
     
-    debug('NUMBER', `Obfuscated: ${numbersObfuscated}`);
     return { tokens: result, numbersObfuscated };
 }
 
@@ -724,46 +683,28 @@ function expressionToTokens(expr: string, line: number, column: number): Token[]
     const result: Token[] = [];
     let i = 0;
     
-    const addTok = (type: TokenType, value: string, literal?: any) => {
-        result.push({ type, value, literal: literal !== undefined ? literal : value, line, column });
-    };
-    
     while (i < expr.length) {
         const c = expr[i];
         if (c === ' ') { i++; continue; }
         
-        switch (c) {
-            case '(': addTok(TokenType.LPAREN, '('); i++; break;
-            case ')': addTok(TokenType.RPAREN, ')'); i++; break;
-            case '+': addTok(TokenType.PLUS, '+'); i++; break;
-            case '*': addTok(TokenType.STAR, '*'); i++; break;
-            case '%': addTok(TokenType.PERCENT, '%'); i++; break;
-            case '^': addTok(TokenType.CARET, '^'); i++; break;
-            case ',': addTok(TokenType.COMMA, ','); i++; break;
-            case '.': addTok(TokenType.DOT, '.'); i++; break;
-            case '#': addTok(TokenType.HASH, '#'); i++; break;
-            case '-': addTok(TokenType.MINUS, '-'); i++; break;
-            case '/':
-                if (expr[i + 1] === '/') { addTok(TokenType.DOUBLE_SLASH, '//'); i += 2; }
-                else { addTok(TokenType.SLASH, '/'); i++; }
-                break;
-            default:
-                if (/[0-9]/.test(c)) {
-                    let numStr = '';
-                    if (c === '0' && expr[i + 1]?.toLowerCase() === 'x') {
-                        numStr = '0x'; i += 2;
-                        while (i < expr.length && /[0-9a-fA-F]/.test(expr[i])) { numStr += expr[i++]; }
-                        addTok(TokenType.NUMBER, numStr, parseInt(numStr, 16));
-                    } else {
-                        while (i < expr.length && /[0-9.]/.test(expr[i])) { numStr += expr[i++]; }
-                        addTok(TokenType.NUMBER, numStr, parseFloat(numStr));
-                    }
-                } else if (/[a-zA-Z_]/.test(c)) {
-                    let ident = '';
-                    while (i < expr.length && /[a-zA-Z0-9_]/.test(expr[i])) { ident += expr[i++]; }
-                    addTok(TokenType.IDENTIFIER, ident);
-                } else { i++; }
+        if (c === '(') { result.push({ type: TokenType.LPAREN, value: '(', line, column }); i++; }
+        else if (c === ')') { result.push({ type: TokenType.RPAREN, value: ')', line, column }); i++; }
+        else if (c === '+') { result.push({ type: TokenType.PLUS, value: '+', line, column }); i++; }
+        else if (c === '*') { result.push({ type: TokenType.STAR, value: '*', line, column }); i++; }
+        else if (c === '-') { result.push({ type: TokenType.MINUS, value: '-', line, column }); i++; }
+        else if (c === '/') { result.push({ type: TokenType.SLASH, value: '/', line, column }); i++; }
+        else if (/[0-9]/.test(c)) {
+            let numStr = '';
+            if (c === '0' && expr[i + 1]?.toLowerCase() === 'x') {
+                numStr = '0x'; i += 2;
+                while (i < expr.length && /[0-9a-fA-F]/.test(expr[i])) { numStr += expr[i++]; }
+                result.push({ type: TokenType.NUMBER, value: numStr, literal: parseInt(numStr, 16), line, column });
+            } else {
+                while (i < expr.length && /[0-9.]/.test(expr[i])) { numStr += expr[i++]; }
+                result.push({ type: TokenType.NUMBER, value: numStr, literal: parseFloat(numStr), line, column });
+            }
         }
+        else { i++; }
     }
     
     return result;
@@ -841,7 +782,7 @@ export function tokensToCode(tokens: Token[], prependCode: string = ''): string 
 }
 
 // ============================================================================
-// MAIN OBFUSCATE FUNCTION
+// MAIN OBFUSCATE
 // ============================================================================
 
 export interface ObfuscateOptions {
@@ -849,7 +790,6 @@ export interface ObfuscateOptions {
     renameVariables?: boolean;
     encryptStrings?: boolean;
     obfuscateNumbers?: boolean;
-    numberComplexity?: 'low' | 'medium' | 'high';
 }
 
 export interface ObfuscateResult {
@@ -874,17 +814,16 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
         debug: options.debug ?? false,
         renameVariables: options.renameVariables ?? true,
         encryptStrings: options.encryptStrings ?? true,
-        obfuscateNumbers: options.obfuscateNumbers ?? true,
-        numberComplexity: options.numberComplexity ?? 'medium'
+        obfuscateNumbers: options.obfuscateNumbers ?? true
     };
     
     enableDebug(opts.debug);
-    debug('MAIN', 'Nephilim v0.3.2 starting', opts);
+    debug('MAIN', 'Nephilim v0.3.3 starting');
     
     let tokens = tokenize(source);
     const originalTokenCount = tokens.length;
     
-    // Phase 1: Rename variables
+    // Phase 1: Rename
     let renameMap: RenameMap = {};
     if (opts.renameVariables) {
         renameMap = createRenameMap(tokens);
@@ -900,25 +839,17 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
         tokens = encResult.tokens;
         prependCode = encResult.encryption.decryptorCode;
         stringsEncrypted = encResult.encryption.encryptedStrings.size;
-        debug('MAIN', `Encrypted ${stringsEncrypted} strings`);
     }
     
     // Phase 3: Obfuscate numbers
     let numbersObfuscated = 0;
     if (opts.obfuscateNumbers) {
-        const numResult = obfuscateNumbers(tokens, {
-            complexity: opts.numberComplexity,
-            useBitwise: true,
-            useMathFunctions: true,
-            maxDepth: 2
-        });
+        const numResult = obfuscateNumbers(tokens);
         tokens = numResult.tokens;
         numbersObfuscated = numResult.numbersObfuscated;
-        debug('MAIN', `Obfuscated ${numbersObfuscated} numbers`);
     }
     
     const code = tokensToCode(tokens, prependCode);
-    const endTime = Date.now();
     
     return {
         code,
@@ -930,7 +861,7 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
             numbersObfuscated,
             originalLength: source.length,
             outputLength: code.length,
-            timeMs: endTime - startTime
+            timeMs: Date.now() - startTime
         },
         debugLogs: opts.debug ? getDebugLogs() : undefined
     };
