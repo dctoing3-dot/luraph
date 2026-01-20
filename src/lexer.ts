@@ -1,23 +1,14 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR - LEXER + RENAMER
-// Version: 0.1.0
-// ============================================================================
-
-// ============================================================================
-// TOKEN TYPES
+// NEPHILIM OBFUSCATOR - LEXER + RENAMER (FIXED)
+// Version: 0.1.1 - Fixed table key renaming bugs
 // ============================================================================
 
 export enum TokenType {
-    // Literals
     NUMBER = 'NUMBER',
     STRING = 'STRING',
     BOOLEAN = 'BOOLEAN',
     NIL = 'NIL',
-    
-    // Identifier
     IDENTIFIER = 'IDENTIFIER',
-    
-    // Keywords
     AND = 'AND',
     BREAK = 'BREAK',
     DO = 'DO',
@@ -40,8 +31,6 @@ export enum TokenType {
     UNTIL = 'UNTIL',
     WHILE = 'WHILE',
     CONTINUE = 'CONTINUE',
-    
-    // Operators
     PLUS = 'PLUS',
     MINUS = 'MINUS',
     STAR = 'STAR',
@@ -50,19 +39,13 @@ export enum TokenType {
     PERCENT = 'PERCENT',
     CARET = 'CARET',
     HASH = 'HASH',
-    
-    // Comparison
     EQ = 'EQ',
     NEQ = 'NEQ',
     LT = 'LT',
     GT = 'GT',
     LTE = 'LTE',
     GTE = 'GTE',
-    
-    // Assignment
     ASSIGN = 'ASSIGN',
-    
-    // Punctuation
     LPAREN = 'LPAREN',
     RPAREN = 'RPAREN',
     LBRACE = 'LBRACE',
@@ -76,14 +59,8 @@ export enum TokenType {
     DOT = 'DOT',
     DOT_DOT = 'DOT_DOT',
     DOT_DOT_DOT = 'DOT_DOT_DOT',
-    
-    // Special
     EOF = 'EOF'
 }
-
-// ============================================================================
-// TOKEN INTERFACE
-// ============================================================================
 
 export interface Token {
     type: TokenType;
@@ -92,10 +69,6 @@ export interface Token {
     line: number;
     column: number;
 }
-
-// ============================================================================
-// KEYWORDS MAP
-// ============================================================================
 
 const KEYWORDS: Record<string, TokenType> = {
     'and': TokenType.AND,
@@ -123,10 +96,6 @@ const KEYWORDS: Record<string, TokenType> = {
     'continue': TokenType.CONTINUE
 };
 
-// ============================================================================
-// LEXER CLASS
-// ============================================================================
-
 export class Lexer {
     private source: string;
     private tokens: Token[] = [];
@@ -146,22 +115,18 @@ export class Lexer {
             this.startColumn = this.column;
             this.scanToken();
         }
-
         this.tokens.push({
             type: TokenType.EOF,
             value: '',
             line: this.line,
             column: this.column
         });
-
         return this.tokens;
     }
 
     private scanToken(): void {
         const c = this.advance();
-
         switch (c) {
-            // Single character tokens
             case '(': this.addToken(TokenType.LPAREN); break;
             case ')': this.addToken(TokenType.RPAREN); break;
             case '{': this.addToken(TokenType.LBRACE); break;
@@ -174,8 +139,6 @@ export class Lexer {
             case '#': this.addToken(TokenType.HASH); break;
             case ';': this.addToken(TokenType.SEMICOLON); break;
             case ',': this.addToken(TokenType.COMMA); break;
-
-            // Dot (could be ., .., or ...)
             case '.':
                 if (this.match('.')) {
                     if (this.match('.')) {
@@ -189,8 +152,6 @@ export class Lexer {
                     this.addToken(TokenType.DOT);
                 }
                 break;
-
-            // Minus or comment
             case '-':
                 if (this.match('-')) {
                     this.comment();
@@ -198,8 +159,6 @@ export class Lexer {
                     this.addToken(TokenType.MINUS);
                 }
                 break;
-
-            // Slash
             case '/':
                 if (this.match('/')) {
                     this.addToken(TokenType.DOUBLE_SLASH);
@@ -207,8 +166,6 @@ export class Lexer {
                     this.addToken(TokenType.SLASH);
                 }
                 break;
-
-            // Colon
             case ':':
                 if (this.match(':')) {
                     this.addToken(TokenType.DOUBLE_COLON);
@@ -216,8 +173,6 @@ export class Lexer {
                     this.addToken(TokenType.COLON);
                 }
                 break;
-
-            // Bracket (could be long string)
             case '[':
                 if (this.peek() === '[' || this.peek() === '=') {
                     this.longString();
@@ -225,8 +180,6 @@ export class Lexer {
                     this.addToken(TokenType.LBRACKET);
                 }
                 break;
-
-            // Equals
             case '=':
                 if (this.match('=')) {
                     this.addToken(TokenType.EQ);
@@ -234,15 +187,11 @@ export class Lexer {
                     this.addToken(TokenType.ASSIGN);
                 }
                 break;
-
-            // Not equals
             case '~':
                 if (this.match('=')) {
                     this.addToken(TokenType.NEQ);
                 }
                 break;
-
-            // Less than
             case '<':
                 if (this.match('=')) {
                     this.addToken(TokenType.LTE);
@@ -250,8 +199,6 @@ export class Lexer {
                     this.addToken(TokenType.LT);
                 }
                 break;
-
-            // Greater than
             case '>':
                 if (this.match('=')) {
                     this.addToken(TokenType.GTE);
@@ -259,25 +206,18 @@ export class Lexer {
                     this.addToken(TokenType.GT);
                 }
                 break;
-
-            // Strings
             case '"':
             case "'":
                 this.string(c);
                 break;
-
-            // Whitespace
             case ' ':
             case '\r':
             case '\t':
                 break;
-
-            // Newline
             case '\n':
                 this.line++;
                 this.column = 1;
                 break;
-
             default:
                 if (this.isDigit(c)) {
                     this.number();
@@ -288,17 +228,13 @@ export class Lexer {
         }
     }
 
-    // ========== STRING HANDLING ==========
-
     private string(quote: string): void {
         let value = '';
-
         while (!this.isAtEnd() && this.peek() !== quote) {
             if (this.peek() === '\n') {
                 this.line++;
                 this.column = 1;
             }
-
             if (this.peek() === '\\') {
                 this.advance();
                 if (!this.isAtEnd()) {
@@ -333,11 +269,9 @@ export class Lexer {
                 value += this.advance();
             }
         }
-
         if (!this.isAtEnd()) {
-            this.advance(); // closing quote
+            this.advance();
         }
-
         this.addToken(TokenType.STRING, value);
     }
 
@@ -347,23 +281,18 @@ export class Lexer {
             this.advance();
             level++;
         }
-
         if (this.peek() !== '[') {
             this.addToken(TokenType.LBRACKET);
             return;
         }
-
-        this.advance(); // second [
-
+        this.advance();
         if (this.peek() === '\n') {
             this.advance();
             this.line++;
             this.column = 1;
         }
-
         let value = '';
         const closing = ']' + '='.repeat(level) + ']';
-
         while (!this.isAtEnd()) {
             if (this.peek() === '\n') {
                 value += this.advance();
@@ -378,11 +307,8 @@ export class Lexer {
                 value += this.advance();
             }
         }
-
         this.addToken(TokenType.STRING, value);
     }
-
-    // ========== NUMBER HANDLING ==========
 
     private number(): void {
         if (this.source[this.start] === '0') {
@@ -405,18 +331,15 @@ export class Lexer {
                 return;
             }
         }
-
         while (this.isDigit(this.peek()) || this.peek() === '_') {
             this.advance();
         }
-
         if (this.peek() === '.' && this.isDigit(this.peekNext())) {
             this.advance();
             while (this.isDigit(this.peek()) || this.peek() === '_') {
                 this.advance();
             }
         }
-
         if (this.peek().toLowerCase() === 'e') {
             this.advance();
             if (this.peek() === '+' || this.peek() === '-') {
@@ -426,21 +349,16 @@ export class Lexer {
                 this.advance();
             }
         }
-
         const text = this.source.substring(this.start, this.current).replace(/_/g, '');
         this.addToken(TokenType.NUMBER, parseFloat(text));
     }
-
-    // ========== IDENTIFIER HANDLING ==========
 
     private identifier(): void {
         while (this.isAlphaNumeric(this.peek())) {
             this.advance();
         }
-
         const text = this.source.substring(this.start, this.current);
         const keywordType = KEYWORDS[text];
-
         if (keywordType !== undefined) {
             if (keywordType === TokenType.TRUE) {
                 this.addToken(TokenType.TRUE, true);
@@ -456,36 +374,28 @@ export class Lexer {
         }
     }
 
-    // ========== COMMENT HANDLING ==========
-
     private comment(): void {
         if (this.peek() === '[' && (this.peekNext() === '[' || this.peekNext() === '=')) {
             this.longComment();
             return;
         }
-
         while (!this.isAtEnd() && this.peek() !== '\n') {
             this.advance();
         }
     }
 
     private longComment(): void {
-        this.advance(); // [
-
+        this.advance();
         let level = 0;
         while (this.peek() === '=') {
             this.advance();
             level++;
         }
-
         if (this.peek() !== '[') {
             return;
         }
-
-        this.advance(); // second [
-
+        this.advance();
         const closing = ']' + '='.repeat(level) + ']';
-
         while (!this.isAtEnd()) {
             if (this.peek() === '\n') {
                 this.advance();
@@ -501,8 +411,6 @@ export class Lexer {
             }
         }
     }
-
-    // ========== HELPER METHODS ==========
 
     private isAtEnd(): boolean {
         return this.current >= this.source.length;
@@ -569,44 +477,31 @@ export class Lexer {
     }
 }
 
-// ============================================================================
-// TOKENIZE FUNCTION
-// ============================================================================
-
 export function tokenize(source: string): Token[] {
     const lexer = new Lexer(source);
     return lexer.tokenize();
 }
 
 // ============================================================================
-// RENAMER - VARIABLE OBFUSCATION
+// RESERVED GLOBALS - JANGAN RENAME
 // ============================================================================
 
 const RESERVED_GLOBALS = new Set([
-    // Lua built-in
     'print', 'type', 'tostring', 'tonumber', 'pairs', 'ipairs',
     'next', 'select', 'unpack', 'pcall', 'xpcall', 'error', 'assert',
     'setmetatable', 'getmetatable', 'rawget', 'rawset', 'rawequal',
     'loadstring', 'load', 'dofile', 'require', 'module',
     'collectgarbage', 'setfenv', 'getfenv',
-    
-    // Lua standard libraries
     'math', 'string', 'table', 'os', 'io', 'coroutine', 'debug',
     'bit32', 'bit', 'utf8', 'package',
-    
-    // Roblox globals
     'game', 'workspace', 'script', 'plugin',
     'wait', 'spawn', 'delay', 'tick', 'time', 'elapsedTime',
     'warn', 'typeof', 'task', 'version',
-    
-    // Roblox types
     'Instance', 'Vector3', 'Vector2', 'CFrame', 'Color3',
     'UDim', 'UDim2', 'Enum', 'Ray', 'Region3', 'Rect',
     'BrickColor', 'TweenInfo', 'NumberSequence', 'ColorSequence',
     'NumberRange', 'PhysicalProperties', 'Faces', 'Axes',
     'PathWaypoint', 'Random', 'TweenService',
-    
-    // Roblox services (commonly used)
     'Players', 'Workspace', 'Lighting', 'ReplicatedStorage',
     'ServerStorage', 'ServerScriptService', 'StarterGui',
     'StarterPlayer', 'Teams', 'SoundService', 'Chat',
@@ -615,8 +510,6 @@ const RESERVED_GLOBALS = new Set([
     'ContextActionService', 'RunService', 'Debris',
     'TweenService', 'PathfindingService', 'PhysicsService',
     'CoreGui', 'CorePackages',
-    
-    // Executor globals
     'getgenv', 'getrenv', 'getrawmetatable', 'setrawmetatable',
     'hookfunction', 'hookmetamethod', 'newcclosure', 'islclosure',
     'iscclosure', 'checkcaller', 'getcallingscript',
@@ -633,12 +526,8 @@ const RESERVED_GLOBALS = new Set([
     'listfiles', 'getcustomasset',
     'setclipboard', 'setfflag', 'getfflag',
     'identifyexecutor', 'getexecutorname',
-    
-    // Special
     '_G', '_VERSION', '_ENV', 'self', 'super',
     'true', 'false', 'nil',
-    
-    // Common method names (should not be renamed)
     'new', 'Create', 'clone', 'Clone', 'Destroy', 'destroy',
     'Connect', 'connect', 'Disconnect', 'disconnect',
     'Wait', 'wait', 'Fire', 'fire', 'Invoke', 'invoke',
@@ -647,81 +536,181 @@ const RESERVED_GLOBALS = new Set([
     'GetPropertyChangedSignal', 'GetAttribute', 'SetAttribute',
     'FindFirstChildOfClass', 'FindFirstChildWhichIsA',
     'FindFirstAncestor', 'FindFirstAncestorOfClass',
+    'LocalPlayer', 'Character', 'Humanoid', 'HumanoidRootPart',
+    'Head', 'Torso', 'UpperTorso', 'LowerTorso',
+    'Parent', 'Name', 'ClassName', 'Value',
+    'Position', 'CFrame', 'Size', 'Transparency',
+    'Enabled', 'Visible', 'Text', 'TextColor3',
+    'BackgroundColor3', 'BackgroundTransparency',
+    'Title', 'Text', 'Duration', 'Icon',
+    'Callback', 'CurrentValue', 'Options', 'CurrentOption',
+    'Range', 'Increment', 'Color',
 ]);
 
 export interface RenameMap {
     [original: string]: string;
 }
 
-const CHARS_SET_1 = ['I', 'l'];
-const CHARS_SET_2 = ['1', 'I', 'l'];
+const CHARS_SET = ['I', 'l'];
 
 function generateObfuscatedName(index: number): string {
     let name = '';
     let num = index;
-    
-    // Generate base name using I and l
     do {
-        name = CHARS_SET_1[num % 2] + name;
+        name = CHARS_SET[num % 2] + name;
         num = Math.floor(num / 2);
     } while (num > 0);
-    
-    // Ensure minimum length of 6 characters
     while (name.length < 6) {
-        name = CHARS_SET_1[Math.floor(Math.random() * 2)] + name;
+        name = CHARS_SET[Math.floor(Math.random() * 2)] + name;
     }
-    
-    // Add random suffix to make it more unique
     for (let i = 0; i < 2; i++) {
-        name += CHARS_SET_1[Math.floor(Math.random() * 2)];
+        name += CHARS_SET[Math.floor(Math.random() * 2)];
     }
-    
     return name;
 }
 
-function canRename(name: string, isMethodCall: boolean): boolean {
+// ============================================================================
+// CONTEXT-AWARE ANALYSIS
+// ============================================================================
+
+interface TokenContext {
+    isTableKey: boolean;
+    isPropertyAccess: boolean;
+    isMethodCall: boolean;
+    isFunctionParam: boolean;
+    isLocalDeclaration: boolean;
+}
+
+function analyzeTokenContext(tokens: Token[], index: number): TokenContext {
+    const token = tokens[index];
+    const prevToken = tokens[index - 1];
+    const nextToken = tokens[index + 1];
+    
+    // Check if inside table {} and followed by =
+    let braceDepth = 0;
+    let isInsideTable = false;
+    for (let i = 0; i < index; i++) {
+        if (tokens[i].type === TokenType.LBRACE) braceDepth++;
+        if (tokens[i].type === TokenType.RBRACE) braceDepth--;
+    }
+    isInsideTable = braceDepth > 0;
+    
+    // Table key: inside {} and followed by =
+    const isTableKey = isInsideTable && 
+                       nextToken && 
+                       nextToken.type === TokenType.ASSIGN;
+    
+    // Property access: after . or :
+    const isPropertyAccess = prevToken && prevToken.type === TokenType.DOT;
+    const isMethodCall = prevToken && prevToken.type === TokenType.COLON;
+    
+    // Function parameter: inside () after function keyword
+    let parenDepth = 0;
+    let isFunctionParam = false;
+    for (let i = index - 1; i >= 0; i--) {
+        if (tokens[i].type === TokenType.RPAREN) parenDepth++;
+        if (tokens[i].type === TokenType.LPAREN) {
+            parenDepth--;
+            if (parenDepth < 0) {
+                // Check if there's a function keyword before this
+                if (i > 0 && tokens[i - 1].type === TokenType.FUNCTION) {
+                    isFunctionParam = true;
+                }
+                break;
+            }
+        }
+    }
+    
+    // Local declaration: after 'local' keyword
+    let isLocalDeclaration = false;
+    for (let i = index - 1; i >= 0; i--) {
+        if (tokens[i].type === TokenType.LOCAL) {
+            isLocalDeclaration = true;
+            break;
+        }
+        if (tokens[i].type === TokenType.ASSIGN || 
+            tokens[i].type === TokenType.FUNCTION ||
+            tokens[i].line < token.line) {
+            break;
+        }
+    }
+    
+    return {
+        isTableKey,
+        isPropertyAccess,
+        isMethodCall,
+        isFunctionParam,
+        isLocalDeclaration
+    };
+}
+
+function canRename(name: string, context: TokenContext): boolean {
+    // Never rename reserved globals
     if (RESERVED_GLOBALS.has(name)) return false;
-    if (isMethodCall) return false;
+    
+    // Never rename table keys (e.g., {Title = "x"})
+    if (context.isTableKey) return false;
+    
+    // Never rename property access (e.g., obj.Property)
+    if (context.isPropertyAccess) return false;
+    
+    // Never rename method calls (e.g., obj:Method())
+    if (context.isMethodCall) return false;
+    
     return true;
 }
 
+// ============================================================================
+// SMART RENAME MAP CREATION
+// ============================================================================
+
 export function createRenameMap(tokens: Token[]): RenameMap {
     const map: RenameMap = {};
+    const localVars = new Set<string>();
     let counter = 0;
-    const seen = new Set<string>();
     
+    // First pass: Find all LOCAL variable declarations
     for (let i = 0; i < tokens.length; i++) {
         const token = tokens[i];
         const prevToken = tokens[i - 1];
         
         if (token.type === TokenType.IDENTIFIER) {
-            // Check if this is a method call (after : or .)
-            const isMethodCall = prevToken && 
-                (prevToken.type === TokenType.COLON || prevToken.type === TokenType.DOT);
+            const context = analyzeTokenContext(tokens, i);
             
-            if (canRename(token.value, isMethodCall) && !seen.has(token.value)) {
-                seen.add(token.value);
-                map[token.value] = generateObfuscatedName(counter++);
+            // Only track local declarations and function parameters
+            if (context.isLocalDeclaration || context.isFunctionParam) {
+                if (!RESERVED_GLOBALS.has(token.value)) {
+                    localVars.add(token.value);
+                }
             }
         }
     }
     
+    // Create rename map for local variables only
+    for (const varName of localVars) {
+        map[varName] = generateObfuscatedName(counter++);
+    }
+    
     return map;
 }
+
+// ============================================================================
+// APPLY RENAME MAP
+// ============================================================================
 
 export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
     const result: Token[] = [];
     
     for (let i = 0; i < tokens.length; i++) {
         const token = tokens[i];
-        const prevToken = tokens[i - 1];
         
         if (token.type === TokenType.IDENTIFIER) {
-            // Don't rename method calls
-            const isMethodCall = prevToken && 
-                (prevToken.type === TokenType.COLON || prevToken.type === TokenType.DOT);
+            const context = analyzeTokenContext(tokens, i);
             
-            if (!isMethodCall && map[token.value]) {
+            // Only rename if:
+            // 1. It's in our map
+            // 2. It's not a table key, property access, or method call
+            if (map[token.value] && canRename(token.value, context)) {
                 result.push({
                     ...token,
                     value: map[token.value],
@@ -783,13 +772,11 @@ export function tokensToCode(tokens: Token[]): string {
         
         if (token.type === TokenType.EOF) continue;
         
-        // Handle newlines
         if (token.line > lastLine) {
             const newlines = token.line - lastLine;
             code += '\n'.repeat(newlines);
             lastLine = token.line;
         } else if (prevToken && prevToken.type !== TokenType.EOF) {
-            // Determine if we need space
             const prevNeedsSpaceAfter = NEEDS_SPACE_AFTER.has(prevToken.type) && 
                                         !NO_SPACE_AFTER.has(prevToken.type);
             const currNeedsSpaceBefore = NEEDS_SPACE_BEFORE.has(token.type) && 
@@ -803,9 +790,7 @@ export function tokensToCode(tokens: Token[]): string {
             }
         }
         
-        // Handle string output
         if (token.type === TokenType.STRING) {
-            // Reconstruct string with proper escaping
             const escaped = token.literal
                 .replace(/\\/g, '\\\\')
                 .replace(/"/g, '\\"')
@@ -837,19 +822,11 @@ export interface ObfuscateResult {
 }
 
 export function obfuscate(source: string): ObfuscateResult {
-    // Step 1: Tokenize
     const tokens = tokenize(source);
-    
-    // Step 2: Create rename map
     const renameMap = createRenameMap(tokens);
-    
-    // Step 3: Apply renaming
     const renamedTokens = applyRenameMap(tokens, renameMap);
-    
-    // Step 4: Rebuild code
     const obfuscatedCode = tokensToCode(renamedTokens);
     
-    // Stats
     const stats = {
         originalTokens: tokens.length,
         identifiersRenamed: Object.keys(renameMap).length,
@@ -857,9 +834,5 @@ export function obfuscate(source: string): ObfuscateResult {
         outputLength: obfuscatedCode.length
     };
     
-    return { 
-        code: obfuscatedCode, 
-        map: renameMap, 
-        stats 
-    };
-    }
+    return { code: obfuscatedCode, map: renameMap, stats };
+}
