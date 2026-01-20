@@ -1,5 +1,5 @@
 import express from 'express';
-import { obfuscate, ObfuscateResult } from './lexer';
+import { obfuscate } from './lexer';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -45,124 +45,78 @@ end
 
 LH()`;
 
-// ============================================================================
-// MAIN TEST
-// ============================================================================
-
 console.log("\n");
-console.log("╔══════════════════════════════════════════════════════════════╗");
-console.log("║    NEPHILIM OBFUSCATOR v0.1.3 - FIXED + DEBUG MODE           ║");
-console.log("╚══════════════════════════════════════════════════════════════╝\n");
+console.log("╔═══════════════════════════════════════════════════════════════════╗");
+console.log("║     NEPHILIM OBFUSCATOR v0.2.0 - PHASE 2: STRING ENCRYPTION       ║");
+console.log("╚═══════════════════════════════════════════════════════════════════╝\n");
 
 try {
-    // Run with DEBUG MODE ON
     const result = obfuscate(testScript, { debug: true });
     
-    // ===== STATS =====
-    console.log("┌──────────────────────────────────────────────────────────────┐");
-    console.log("│ 📊 STATISTICS                                                │");
-    console.log("└──────────────────────────────────────────────────────────────┘");
-    console.log(`   ⏱  Time        : ${result.stats.timeMs}ms`);
-    console.log(`   📝 Tokens      : ${result.stats.originalTokens}`);
-    console.log(`   🔄 Renamed     : ${result.stats.identifiersRenamed}`);
-    console.log(`   📏 Size        : ${result.stats.originalLength} → ${result.stats.outputLength} chars\n`);
+    console.log("┌───────────────────────────────────────────────────────────────────┐");
+    console.log("│ 📊 STATISTICS                                                    │");
+    console.log("└───────────────────────────────────────────────────────────────────┘");
+    console.log(`   ⏱  Time             : ${result.stats.timeMs}ms`);
+    console.log(`   📝 Tokens           : ${result.stats.originalTokens}`);
+    console.log(`   🔄 Vars Renamed     : ${result.stats.identifiersRenamed}`);
+    console.log(`   🔐 Strings Encrypted: ${result.stats.stringsEncrypted}`);
+    console.log(`   📏 Size             : ${result.stats.originalLength} → ${result.stats.outputLength} chars`);
+    console.log(`   📈 Expansion        : ${((result.stats.outputLength / result.stats.originalLength - 1) * 100).toFixed(1)}%\n`);
     
-    // ===== RENAME MAP =====
-    console.log("┌──────────────────────────────────────────────────────────────┐");
-    console.log("│ 🔄 RENAME MAP (No Collisions!)                               │");
-    console.log("└──────────────────────────────────────────────────────────────┘");
+    console.log("┌───────────────────────────────────────────────────────────────────┐");
+    console.log("│ 🔄 RENAME MAP                                                    │");
+    console.log("└───────────────────────────────────────────────────────────────────┘");
+    Object.entries(result.map).forEach(([o, n]) => console.log(`   ${o.padEnd(12)} → ${n}`));
     
-    const names = Object.values(result.map);
-    const uniqueNames = new Set(names);
-    const hasCollision = names.length !== uniqueNames.size;
-    
-    Object.entries(result.map).forEach(([orig, obf]) => {
-        console.log(`   ${orig.padEnd(12)} → ${obf}`);
-    });
-    
-    if (hasCollision) {
-        console.log("\n   ⚠️  WARNING: Name collision detected!");
-    } else {
-        console.log(`\n   ✅ All ${names.length} names are unique!`);
-    }
-    
-    // ===== DEBUG LOGS =====
-    if (result.debugLogs && result.debugLogs.length > 0) {
-        console.log("\n┌──────────────────────────────────────────────────────────────┐");
-        console.log("│ 🔍 DEBUG LOGS                                                │");
-        console.log("└──────────────────────────────────────────────────────────────┘");
-        
-        // Group by phase
-        const phases: { [key: string]: typeof result.debugLogs } = {};
-        result.debugLogs.forEach(log => {
-            if (!phases[log.phase]) phases[log.phase] = [];
-            phases[log.phase].push(log);
-        });
-        
-        // Show summary per phase
-        Object.entries(phases).forEach(([phase, logs]) => {
-            console.log(`\n   [${phase}] - ${logs.length} entries`);
-            // Show first 5 of each phase
-            logs.slice(0, 5).forEach(log => {
-                const data = log.data ? ` ${JSON.stringify(log.data)}` : '';
-                console.log(`      • ${log.message}${data}`);
+    if (result.debugLogs) {
+        console.log("\n┌───────────────────────────────────────────────────────────────────┐");
+        console.log("│ 🔐 ENCRYPTION DEBUG                                              │");
+        console.log("└───────────────────────────────────────────────────────────────────┘");
+        result.debugLogs
+            .filter(l => l.phase === 'ENCRYPT')
+            .slice(0, 10)
+            .forEach(l => {
+                const data = l.data ? ` ${JSON.stringify(l.data)}` : '';
+                console.log(`   • ${l.message}${data}`);
             });
-            if (logs.length > 5) {
-                console.log(`      ... and ${logs.length - 5} more`);
-            }
-        });
     }
     
-    // ===== OUTPUT =====
-    console.log("\n┌──────────────────────────────────────────────────────────────┐");
-    console.log("│ 📜 OBFUSCATED OUTPUT                                         │");
-    console.log("└──────────────────────────────────────────────────────────────┘");
+    console.log("\n┌───────────────────────────────────────────────────────────────────┐");
+    console.log("│ 📜 OBFUSCATED OUTPUT                                             │");
+    console.log("└───────────────────────────────────────────────────────────────────┘");
     console.log(result.code);
     
-    console.log("\n╔══════════════════════════════════════════════════════════════╗");
-    console.log("║  ✅ PHASE 1 COMPLETE - Ready for Phase 2: String Encryption  ║");
-    console.log("╚══════════════════════════════════════════════════════════════╝\n");
+    console.log("\n╔═══════════════════════════════════════════════════════════════════╗");
+    console.log("║  ✅ PHASE 2 COMPLETE - Strings are now XOR encrypted!            ║");
+    console.log("╚═══════════════════════════════════════════════════════════════════╝\n");
 
 } catch (e) {
     console.error("❌ ERROR:", e);
 }
-
-// ============================================================================
-// EXPRESS SERVER
-// ============================================================================
 
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/', (_, res) => {
     res.json({
         name: 'Nephilim Obfuscator',
-        version: '0.1.3',
-        status: 'online',
-        endpoints: {
-            'GET /': 'This info',
-            'POST /obfuscate': 'Obfuscate code',
-            'POST /obfuscate?debug=true': 'Obfuscate with debug logs'
-        }
+        version: '0.2.0',
+        phase: 'Phase 2 - String Encryption',
+        features: ['Variable Renaming', 'String XOR Encryption'],
     });
 });
 
 app.post('/obfuscate', (req, res) => {
     try {
-        const { code } = req.body;
-        const debug = req.query.debug === 'true';
-        
-        if (!code) {
-            return res.status(400).json({ error: 'No code provided' });
-        }
-        
-        const result = obfuscate(code, { debug });
+        const { code, options } = req.body;
+        if (!code) return res.status(400).json({ error: 'No code provided' });
+        const result = obfuscate(code, { 
+            debug: req.query.debug === 'true',
+            ...options 
+        });
         res.json({ success: true, ...result });
-        
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
 });
 
-app.listen(port, () => {
-    console.log(`🚀 Nephilim API Server running on port ${port}`);
-});
+app.listen(port, () => console.log(`🚀 Nephilim v0.2.0 running on port ${port}`));
