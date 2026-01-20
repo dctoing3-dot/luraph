@@ -1,5 +1,5 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR v0.3.3 - PHASE 3: CRITICAL BUG FIXES
+// NEPHILIM OBFUSCATOR v0.3.4 - PHASE 3: TABLE KEY DETECTION FIX
 // ============================================================================
 
 export enum TokenType {
@@ -79,7 +79,6 @@ export class Lexer {
             this.scanToken();
         }
         this.tokens.push({ type: TokenType.EOF, value: '', line: this.line, column: this.column });
-        debug('LEXER', 'Tokenization complete', { tokenCount: this.tokens.length });
         return this.tokens;
     }
 
@@ -321,44 +320,101 @@ class NameGenerator {
 }
 
 // ============================================================================
-// HELPER: Check if token is inside table literal as a KEY
+// STATEMENT BOUNDARY KEYWORDS - Used to detect when we leave a table context
+// ============================================================================
+
+const STATEMENT_KEYWORDS = new Set([
+    TokenType.LOCAL,
+    TokenType.FUNCTION,
+    TokenType.IF,
+    TokenType.THEN,
+    TokenType.ELSE,
+    TokenType.ELSEIF,
+    TokenType.END,
+    TokenType.DO,
+    TokenType.WHILE,
+    TokenType.FOR,
+    TokenType.REPEAT,
+    TokenType.UNTIL,
+    TokenType.RETURN,
+    TokenType.BREAK,
+    TokenType.GOTO,
+]);
+
+// ============================================================================
+// FIXED: Check if identifier at position is a TABLE KEY (not regular assignment)
 // ============================================================================
 
 function isTableKey(tokens: Token[], index: number): boolean {
+    // Must be followed by = (assignment)
     const next = tokens[index + 1];
+    if (!next || next.type !== TokenType.ASSIGN) {
+        return false;
+    }
     
-    // Must be followed by = (but not ==)
-    if (!next || next.type !== TokenType.ASSIGN) return false;
+    // Check token before: if directly after { or , at same brace level, it's a table key
+    // Examples of table keys:
+    //   { key = value }     -- key is table key
+    //   { a = 1, b = 2 }    -- a, b are table keys
+    //   { [expr] = value }  -- not our concern (uses brackets)
     
-    // Look backwards to find matching { without hitting }
+    // Examples of NON table keys:
+    //   x = 1               -- regular assignment
+    //   obj.x = 1           -- property assignment (already handled by prev.type === DOT)
+    //   t[x] = 1            -- indexed assignment
+    
     let braceDepth = 0;
+    
     for (let j = index - 1; j >= 0; j--) {
         const t = tokens[j];
         
+        // Track brace depth (going backwards)
         if (t.type === TokenType.RBRACE) {
             braceDepth++;
-        } else if (t.type === TokenType.LBRACE) {
+            continue;
+        }
+        
+        if (t.type === TokenType.LBRACE) {
             if (braceDepth === 0) {
-                // Found opening brace - this IS a table key
+                // Found the opening { for our context - this IS a table key
                 return true;
             }
             braceDepth--;
-        } else if (t.type === TokenType.SEMICOLON) {
-            // Statement separator - not inside table
+            continue;
+        }
+        
+        // If we're inside a nested brace (braceDepth > 0), keep looking
+        if (braceDepth > 0) {
+            continue;
+        }
+        
+        // At braceDepth 0, check for statement boundaries
+        
+        // Semicolon always ends a statement
+        if (t.type === TokenType.SEMICOLON) {
             return false;
-        } else if (t.type === TokenType.THEN || t.type === TokenType.DO || 
-                   t.type === TokenType.ELSE || t.type === TokenType.FUNCTION ||
-                   t.type === TokenType.REPEAT) {
-            // Control structure - not inside table (unless nested)
-            if (braceDepth === 0) return false;
+        }
+        
+        // Statement keywords indicate we're outside any table
+        if (STATEMENT_KEYWORDS.has(t.type)) {
+            return false;
+        }
+        
+        // Closing paren/bracket at depth 0 means we passed a function call or index
+        // This is a statement boundary in practice
+        if (t.type === TokenType.RPAREN || t.type === TokenType.RBRACKET) {
+            // Could be end of: function call, function def, if condition, etc.
+            // Keep looking, but these are suspicious
+            continue;
         }
     }
     
+    // Reached start of tokens without finding { or statement boundary
     return false;
 }
 
 // ============================================================================
-// IDENTIFIER ANALYSIS - FIXED
+// IDENTIFIER ANALYSIS
 // ============================================================================
 
 function analyzeIdentifiers(tokens: Token[]): Set<string> {
@@ -375,35 +431,34 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
         // Skip property access: obj.prop or obj:method
         if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) continue;
         
-        // Skip table keys: { key = val }
+        // Skip table keys
         if (isTableKey(tokens, i)) continue;
         
         let isLocal = false;
         
-        // 1. Direct local declaration: local x
+        // 1. Direct local: local x
         if (prev && prev.type === TokenType.LOCAL) {
             isLocal = true;
         }
         
-        // 2. Multiple local declaration: local a, b, c
+        // 2. Multiple local: local a, b, c
         if (!isLocal && prev && prev.type === TokenType.COMMA) {
             for (let j = i - 1; j >= 0; j--) {
                 const tk = tokens[j];
                 if (tk.type === TokenType.LOCAL) { isLocal = true; break; }
                 if (tk.type === TokenType.ASSIGN || tk.type === TokenType.IN ||
-                    tk.type === TokenType.SEMICOLON || tk.type === TokenType.END ||
-                    tk.type === TokenType.DO || tk.type === TokenType.THEN) break;
+                    STATEMENT_KEYWORDS.has(tk.type)) break;
             }
         }
         
-        // 3. Local function: local function name()
+        // 3. Local function: local function name
         if (!isLocal && prev && prev.type === TokenType.FUNCTION) {
             if (prev2 && prev2.type === TokenType.LOCAL) {
                 isLocal = true;
             }
         }
         
-        // 4. Function parameter: function(a, b, c)
+        // 4. Function parameter
         if (!isLocal) {
             let parenDepth = 0;
             for (let j = i - 1; j >= 0; j--) {
@@ -412,35 +467,30 @@ function analyzeIdentifiers(tokens: Token[]): Set<string> {
                 else if (tk.type === TokenType.LPAREN) {
                     parenDepth--;
                     if (parenDepth < 0) {
-                        // Check if this paren belongs to function definition
-                        if (j > 0 && tokens[j - 1].type === TokenType.FUNCTION) {
-                            isLocal = true;
-                        } else if (j > 1 && tokens[j - 1].type === TokenType.IDENTIFIER && 
-                                   tokens[j - 2].type === TokenType.FUNCTION) {
-                            isLocal = true;
+                        // Check for function keyword before this paren
+                        for (let k = j - 1; k >= 0; k--) {
+                            if (tokens[k].type === TokenType.FUNCTION) { isLocal = true; break; }
+                            if (tokens[k].type !== TokenType.IDENTIFIER) break;
                         }
                         break;
                     }
-                } else if (tk.type === TokenType.END || tk.type === TokenType.DO ||
-                           tk.type === TokenType.THEN || tk.type === TokenType.SEMICOLON) {
-                    break;
                 }
+                else if (STATEMENT_KEYWORDS.has(tk.type)) break;
             }
         }
         
-        // 5. For loop variables: for i = 1, 10 or for k, v in pairs()
+        // 5. For loop variables
         if (!isLocal) {
             for (let j = i - 1; j >= 0; j--) {
                 const tk = tokens[j];
                 if (tk.type === TokenType.FOR) { isLocal = true; break; }
-                if (tk.type === TokenType.DO || tk.type === TokenType.END ||
-                    tk.type === TokenType.SEMICOLON || tk.type === TokenType.THEN) break;
+                if (tk.type === TokenType.DO || STATEMENT_KEYWORDS.has(tk.type)) break;
             }
         }
         
         if (isLocal) {
             localVars.add(t.value);
-            debug('ANALYZE', `Found local: ${t.value}`);
+            debug('ANALYZE', `Found local: ${t.value} at line ${t.line}`);
         }
     }
     
@@ -461,7 +511,7 @@ export function createRenameMap(tokens: Token[]): RenameMap {
 }
 
 // ============================================================================
-// APPLY RENAME - FIXED
+// APPLY RENAME
 // ============================================================================
 
 export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
@@ -470,7 +520,6 @@ export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         
-        // Not an identifier or not in map - keep as is
         if (t.type !== TokenType.IDENTIFIER || !map[t.value]) {
             result.push(t);
             continue;
@@ -478,28 +527,28 @@ export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
         
         const prev = tokens[i - 1];
         
-        // Skip property access: obj.prop or obj:method
+        // Skip property access
         if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) {
             result.push(t);
             continue;
         }
         
-        // Skip table keys: { key = value }
-        // FIXED: Use proper detection instead of braceDepth
+        // Skip table keys (using same logic as analysis)
         if (isTableKey(tokens, i)) {
             result.push(t);
             continue;
         }
         
-        // Rename this identifier
+        // Rename
         result.push({ ...t, value: map[t.value], literal: map[t.value] });
+        debug('APPLY', `Renamed ${t.value} at line ${t.line}`);
     }
     
     return result;
 }
 
 // ============================================================================
-// STRING ENCRYPTION (XOR) - FIXED
+// STRING ENCRYPTION
 // ============================================================================
 
 export interface StringEncryptionResult {
@@ -536,7 +585,7 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     const decryptorName = generateObfuscatedName('_');
     const globalKey = generateXorKey();
     
-    debug('ENCRYPT', `XOR key: ${globalKey}, Decryptor: ${decryptorName}`);
+    debug('ENCRYPT', `XOR key: ${globalKey}`);
     
     const result: Token[] = [];
     let stringCount = 0;
@@ -564,7 +613,6 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     
     debug('ENCRYPT', `Encrypted ${stringCount} strings`);
     
-    // Universal decryptor
     const decryptorCode = `local ${decryptorName}=(function()local b=bit32 or bit local x=b and b.bxor or function(a,c)local r,p=0,1 while a>0 or c>0 do if a%2~=c%2 then r=r+p end a,c,p=math.floor(a/2),math.floor(c/2),p*2 end return r end return function(s,k)local o=""for i=1,#s do o=o..string.char(x(s:byte(i),k))end return o end end)()`;
     
     return {
@@ -574,15 +622,8 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
 }
 
 // ============================================================================
-// NUMBER OBFUSCATION - PHASE 3
+// NUMBER OBFUSCATION
 // ============================================================================
-
-export interface NumberObfuscationConfig {
-    complexity: 'low' | 'medium' | 'high';
-    useBitwise: boolean;
-    useMathFunctions: boolean;
-    maxDepth: number;
-}
 
 class NumberObfuscator {
     obfuscateNumber(num: number): string {
@@ -595,23 +636,20 @@ class NumberObfuscator {
     }
     
     private obfuscateInteger(num: number): string {
-        const strategies: (() => string)[] = [];
         const absNum = Math.abs(num);
+        const strategies: (() => string)[] = [];
         
-        // Addition
         strategies.push(() => {
             const a = Math.floor(Math.random() * 500) + 100;
             const b = num - a;
             return `(${a}${b >= 0 ? '+' : ''}${b})`;
         });
         
-        // Subtraction
         strategies.push(() => {
             const a = num + Math.floor(Math.random() * 500) + 100;
             return `(${a}-${a - num})`;
         });
         
-        // Multiplication
         if (absNum > 1) {
             for (let f = 2; f <= Math.min(20, Math.sqrt(absNum)); f++) {
                 if (absNum % f === 0) {
@@ -622,7 +660,6 @@ class NumberObfuscator {
             }
         }
         
-        // Hex
         if (absNum > 15) {
             strategies.push(() => `${num < 0 ? '-' : ''}0x${absNum.toString(16).toUpperCase()}`);
         }
@@ -661,7 +698,7 @@ export function obfuscateNumbers(tokens: Token[]): { tokens: Token[]; numbersObf
             }
             if (inForLoop) { result.push(t); continue; }
             
-            // Skip simple indices [1], [2], etc.
+            // Skip simple indices
             const prev = tokens[i - 1];
             if (prev?.type === TokenType.LBRACKET && num >= 1 && num <= 10 && Number.isInteger(num)) {
                 result.push(t); continue;
@@ -818,7 +855,7 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
     };
     
     enableDebug(opts.debug);
-    debug('MAIN', 'Nephilim v0.3.3 starting');
+    debug('MAIN', 'Nephilim v0.3.4 starting');
     
     let tokens = tokenize(source);
     const originalTokenCount = tokens.length;
@@ -841,7 +878,7 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
         stringsEncrypted = encResult.encryption.encryptedStrings.size;
     }
     
-    // Phase 3: Obfuscate numbers
+    // Phase 3: Numbers
     let numbersObfuscated = 0;
     if (opts.obfuscateNumbers) {
         const numResult = obfuscateNumbers(tokens);
