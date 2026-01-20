@@ -1,5 +1,5 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR v0.2.0 - PHASE 2: STRING ENCRYPTION
+// NEPHILIM OBFUSCATOR v0.2.1 - ROBLOX COMPATIBLE
 // ============================================================================
 
 export enum TokenType {
@@ -48,10 +48,7 @@ export interface DebugLog { phase: string; message: string; data?: any; }
 let debugLogs: DebugLog[] = [];
 let debugEnabled = false;
 
-export function enableDebug(enabled: boolean = true): void {
-    debugEnabled = enabled;
-    debugLogs = [];
-}
+export function enableDebug(enabled: boolean = true): void { debugEnabled = enabled; debugLogs = []; }
 export function getDebugLogs(): DebugLog[] { return debugLogs; }
 function debug(phase: string, message: string, data?: any): void {
     if (debugEnabled) debugLogs.push({ phase, message, data });
@@ -79,7 +76,6 @@ export class Lexer {
             this.scanToken();
         }
         this.tokens.push({ type: TokenType.EOF, value: '', line: this.line, column: this.column });
-        debug('LEXER', 'Tokenization complete', { tokenCount: this.tokens.length });
         return this.tokens;
     }
 
@@ -429,7 +425,7 @@ export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
 }
 
 // ============================================================================
-// STRING ENCRYPTION (XOR)
+// STRING ENCRYPTION (XOR) - ROBLOX COMPATIBLE
 // ============================================================================
 
 export interface StringEncryptionResult {
@@ -439,27 +435,24 @@ export interface StringEncryptionResult {
 }
 
 function generateXorKey(): number {
-    // Random key between 0x10 and 0xFF (avoid 0 which does nothing)
-    return Math.floor(Math.random() * 0xEF) + 0x10;
+    return Math.floor(Math.random() * 200) + 50; // 50-249
 }
 
-function xorEncrypt(str: string, key: number): string {
-    let result = '';
+// Convert string to Lua byte table format {72,101,108,108,111}
+function stringToByteTable(str: string, key: number): string {
+    const bytes: number[] = [];
     for (let i = 0; i < str.length; i++) {
-        const charCode = str.charCodeAt(i);
-        const encrypted = charCode ^ key;
-        result += '\\x' + encrypted.toString(16).padStart(2, '0');
+        bytes.push(str.charCodeAt(i) ^ key);
     }
-    return result;
+    return '{' + bytes.join(',') + '}';
 }
 
 function generateDecryptorName(): string {
-    const chars = ['I', 'l', '_'];
+    const chars = ['I', 'l'];
     let name = '_';
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
         name += chars[Math.floor(Math.random() * 2)];
     }
-    name += '_';
     return name;
 }
 
@@ -468,8 +461,7 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     const decryptorName = generateDecryptorName();
     const globalKey = generateXorKey();
     
-    debug('ENCRYPT', `Using global XOR key: 0x${globalKey.toString(16)}`);
-    debug('ENCRYPT', `Decryptor function name: ${decryptorName}`);
+    debug('ENCRYPT', `XOR key: ${globalKey}, Decryptor: ${decryptorName}`);
     
     const result: Token[] = [];
     let stringCount = 0;
@@ -477,30 +469,20 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         
-        if (t.type === TokenType.STRING && t.literal && t.literal.length > 0) {
+        if (t.type === TokenType.STRING && t.literal && t.literal.length > 2) {
             const original = t.literal as string;
+            const byteTable = stringToByteTable(original, globalKey);
             
-            // Skip very short strings (1-2 chars) - not worth encrypting
-            if (original.length <= 2) {
-                result.push(t);
-                continue;
-            }
+            encryptedStrings.set(original, { encrypted: byteTable, key: globalKey });
             
-            const encrypted = xorEncrypt(original, globalKey);
-            encryptedStrings.set(original, { encrypted, key: globalKey });
+            debug('ENCRYPT', `Encrypted: "${original.substring(0, 20)}..."`);
             
-            debug('ENCRYPT', `String encrypted`, { 
-                original: original.substring(0, 30) + (original.length > 30 ? '...' : ''),
-                length: original.length 
-            });
-            
-            // Replace string token with decryptor call
-            // _D_("encrypted", key)
+            // Replace with: _XXXX({bytes}, key)
             result.push({ type: TokenType.IDENTIFIER, value: decryptorName, line: t.line, column: t.column });
             result.push({ type: TokenType.LPAREN, value: '(', line: t.line, column: t.column });
-            result.push({ type: TokenType.STRING, value: `"${encrypted}"`, literal: encrypted, line: t.line, column: t.column });
+            result.push({ type: TokenType.IDENTIFIER, value: byteTable, line: t.line, column: t.column }); // Byte table
             result.push({ type: TokenType.COMMA, value: ',', line: t.line, column: t.column });
-            result.push({ type: TokenType.NUMBER, value: `0x${globalKey.toString(16)}`, literal: globalKey, line: t.line, column: t.column });
+            result.push({ type: TokenType.NUMBER, value: String(globalKey), literal: globalKey, line: t.line, column: t.column });
             result.push({ type: TokenType.RPAREN, value: ')', line: t.line, column: t.column });
             
             stringCount++;
@@ -509,10 +491,11 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
         }
     }
     
-    debug('ENCRYPT', `Total strings encrypted: ${stringCount}`);
+    debug('ENCRYPT', `Total encrypted: ${stringCount}`);
     
-    // Generate decryptor function code
-    const decryptorCode = `local ${decryptorName}=function(s,k)local r=""for i=1,#s do r=r..string.char(bit32.bxor(string.byte(s,i),k))end return r end`;
+    // Roblox-compatible decryptor using byte table
+    // Works with both bit32 and bit libraries
+    const decryptorCode = `local ${decryptorName}=(function(b,k)local s=""for i=1,#b do s=s..string.char((bit32 and bit32.bxor or bit.bxor)(b[i],k))end return s end)`;
     
     return {
         tokens: result,
@@ -569,8 +552,10 @@ export function tokensToCode(tokens: Token[], prependCode: string = ''): string 
         }
         
         if (t.type === TokenType.STRING) {
-            // Check if already escaped (from encryption)
-            if (t.value.startsWith('"') && t.value.endsWith('"')) {
+            // Check if it's a byte table (starts with {)
+            if (t.value.startsWith('{') || (t.literal && typeof t.literal === 'string' && t.literal.startsWith('{'))) {
+                code += t.value.startsWith('{') ? t.value : t.literal;
+            } else if (t.value.startsWith('"') && t.value.endsWith('"')) {
                 code += t.value;
             } else {
                 const esc = (t.literal || '')
@@ -581,6 +566,9 @@ export function tokensToCode(tokens: Token[], prependCode: string = ''): string 
                     .replace(/\t/g, '\\t');
                 code += '"' + esc + '"';
             }
+        } else if (t.type === TokenType.IDENTIFIER && t.value.startsWith('{')) {
+            // Byte table passed as identifier
+            code += t.value;
         } else {
             code += t.value;
         }
@@ -590,7 +578,7 @@ export function tokensToCode(tokens: Token[], prependCode: string = ''): string 
 }
 
 // ============================================================================
-// MAIN OBFUSCATE FUNCTION
+// MAIN OBFUSCATE
 // ============================================================================
 
 export interface ObfuscateOptions {
@@ -616,7 +604,6 @@ export interface ObfuscateResult {
 export function obfuscate(source: string, options: ObfuscateOptions = {}): ObfuscateResult {
     const startTime = Date.now();
     
-    // Defaults
     const opts = {
         debug: options.debug ?? false,
         renameVariables: options.renameVariables ?? true,
@@ -624,21 +611,16 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
     };
     
     enableDebug(opts.debug);
-    debug('MAIN', 'Starting obfuscation', { options: opts });
+    debug('MAIN', 'Starting obfuscation');
     
-    // Step 1: Tokenize
     let tokens = tokenize(source);
-    debug('MAIN', 'Tokenization complete', { tokenCount: tokens.length });
     
-    // Step 2: Rename variables
     let renameMap: RenameMap = {};
     if (opts.renameVariables) {
         renameMap = createRenameMap(tokens);
         tokens = applyRenameMap(tokens, renameMap);
-        debug('MAIN', 'Renaming complete', { renamed: Object.keys(renameMap).length });
     }
     
-    // Step 3: Encrypt strings
     let stringsEncrypted = 0;
     let prependCode = '';
     if (opts.encryptStrings) {
@@ -646,14 +628,10 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
         tokens = encResult.tokens;
         prependCode = encResult.encryption.decryptorCode;
         stringsEncrypted = encResult.encryption.encryptedStrings.size;
-        debug('MAIN', 'String encryption complete', { encrypted: stringsEncrypted });
     }
     
-    // Step 4: Generate code
     const code = tokensToCode(tokens, prependCode);
-    
     const endTime = Date.now();
-    debug('MAIN', 'Obfuscation complete', { timeMs: endTime - startTime });
     
     const result: ObfuscateResult = {
         code,
@@ -671,4 +649,4 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
     if (opts.debug) result.debugLogs = getDebugLogs();
     
     return result;
-    }
+                                                            }
