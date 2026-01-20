@@ -1,5 +1,5 @@
 import express from 'express';
-import { obfuscate } from './lexer';
+import { obfuscate, ObfuscateResult } from './lexer';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -45,35 +45,124 @@ end
 
 LH()`;
 
-console.log("\n╔════════════════════════════════════════════════════════════╗");
-console.log("║       NEPHILIM OBFUSCATOR v0.1.2 - ALL BUGS FIXED          ║");
-console.log("╚════════════════════════════════════════════════════════════╝\n");
+// ============================================================================
+// MAIN TEST
+// ============================================================================
+
+console.log("\n");
+console.log("╔══════════════════════════════════════════════════════════════╗");
+console.log("║    NEPHILIM OBFUSCATOR v0.1.3 - FIXED + DEBUG MODE           ║");
+console.log("╚══════════════════════════════════════════════════════════════╝\n");
 
 try {
-    const result = obfuscate(testScript);
+    // Run with DEBUG MODE ON
+    const result = obfuscate(testScript, { debug: true });
     
-    console.log("📊 STATS:");
-    console.log(`   Tokens: ${result.stats.originalTokens} | Renamed: ${result.stats.identifiersRenamed}`);
-    console.log(`   Size: ${result.stats.originalLength} → ${result.stats.outputLength} chars\n`);
+    // ===== STATS =====
+    console.log("┌──────────────────────────────────────────────────────────────┐");
+    console.log("│ 📊 STATISTICS                                                │");
+    console.log("└──────────────────────────────────────────────────────────────┘");
+    console.log(`   ⏱  Time        : ${result.stats.timeMs}ms`);
+    console.log(`   📝 Tokens      : ${result.stats.originalTokens}`);
+    console.log(`   🔄 Renamed     : ${result.stats.identifiersRenamed}`);
+    console.log(`   📏 Size        : ${result.stats.originalLength} → ${result.stats.outputLength} chars\n`);
     
-    console.log("🔄 RENAME MAP:");
-    Object.entries(result.map).forEach(([o, n]) => console.log(`   ${o.padEnd(12)} → ${n}`));
+    // ===== RENAME MAP =====
+    console.log("┌──────────────────────────────────────────────────────────────┐");
+    console.log("│ 🔄 RENAME MAP (No Collisions!)                               │");
+    console.log("└──────────────────────────────────────────────────────────────┘");
     
-    console.log("\n📜 OUTPUT:\n" + "─".repeat(60));
+    const names = Object.values(result.map);
+    const uniqueNames = new Set(names);
+    const hasCollision = names.length !== uniqueNames.size;
+    
+    Object.entries(result.map).forEach(([orig, obf]) => {
+        console.log(`   ${orig.padEnd(12)} → ${obf}`);
+    });
+    
+    if (hasCollision) {
+        console.log("\n   ⚠️  WARNING: Name collision detected!");
+    } else {
+        console.log(`\n   ✅ All ${names.length} names are unique!`);
+    }
+    
+    // ===== DEBUG LOGS =====
+    if (result.debugLogs && result.debugLogs.length > 0) {
+        console.log("\n┌──────────────────────────────────────────────────────────────┐");
+        console.log("│ 🔍 DEBUG LOGS                                                │");
+        console.log("└──────────────────────────────────────────────────────────────┘");
+        
+        // Group by phase
+        const phases: { [key: string]: typeof result.debugLogs } = {};
+        result.debugLogs.forEach(log => {
+            if (!phases[log.phase]) phases[log.phase] = [];
+            phases[log.phase].push(log);
+        });
+        
+        // Show summary per phase
+        Object.entries(phases).forEach(([phase, logs]) => {
+            console.log(`\n   [${phase}] - ${logs.length} entries`);
+            // Show first 5 of each phase
+            logs.slice(0, 5).forEach(log => {
+                const data = log.data ? ` ${JSON.stringify(log.data)}` : '';
+                console.log(`      • ${log.message}${data}`);
+            });
+            if (logs.length > 5) {
+                console.log(`      ... and ${logs.length - 5} more`);
+            }
+        });
+    }
+    
+    // ===== OUTPUT =====
+    console.log("\n┌──────────────────────────────────────────────────────────────┐");
+    console.log("│ 📜 OBFUSCATED OUTPUT                                         │");
+    console.log("└──────────────────────────────────────────────────────────────┘");
     console.log(result.code);
-    console.log("─".repeat(60));
     
-    console.log("\n✅ SUCCESS! Function names & params now renamed!");
+    console.log("\n╔══════════════════════════════════════════════════════════════╗");
+    console.log("║  ✅ PHASE 1 COMPLETE - Ready for Phase 2: String Encryption  ║");
+    console.log("╚══════════════════════════════════════════════════════════════╝\n");
 
-} catch (e) { console.error("❌ ERROR:", e); }
+} catch (e) {
+    console.error("❌ ERROR:", e);
+}
+
+// ============================================================================
+// EXPRESS SERVER
+// ============================================================================
 
 app.use(express.json({ limit: '10mb' }));
-app.get('/', (_, res) => res.json({ name: 'Nephilim', version: '0.1.2', status: 'online' }));
+
+app.get('/', (_, res) => {
+    res.json({
+        name: 'Nephilim Obfuscator',
+        version: '0.1.3',
+        status: 'online',
+        endpoints: {
+            'GET /': 'This info',
+            'POST /obfuscate': 'Obfuscate code',
+            'POST /obfuscate?debug=true': 'Obfuscate with debug logs'
+        }
+    });
+});
+
 app.post('/obfuscate', (req, res) => {
     try {
         const { code } = req.body;
-        if (!code) return res.status(400).json({ error: 'No code' });
-        res.json({ success: true, ...obfuscate(code) });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+        const debug = req.query.debug === 'true';
+        
+        if (!code) {
+            return res.status(400).json({ error: 'No code provided' });
+        }
+        
+        const result = obfuscate(code, { debug });
+        res.json({ success: true, ...result });
+        
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
 });
-app.listen(port, () => console.log(`\n🚀 Server on port ${port}`));
+
+app.listen(port, () => {
+    console.log(`🚀 Nephilim API Server running on port ${port}`);
+});
