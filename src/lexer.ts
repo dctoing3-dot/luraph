@@ -135,7 +135,7 @@ export function injectGarbageFunctions(count:number):string{
 }
 
 // ============================================================================
-// PHASE 8: ANTI-DEBUG + ANTI-TAMPER (FIXED)
+// PHASE 8: ANTI-DEBUG + ANTI-TAMPER (FIXED FOR ROBLOX)
 // ============================================================================
 export interface AntiDebugConfig{
     checkDebugLibrary:boolean;
@@ -163,21 +163,26 @@ export function generateAntiDebugCode(config:Partial<AntiDebugConfig>={}):string
     checks.push(`local ${flagVar}=false`);
     checks.push(`local ${checksVar}={}`);
     
+    // FIXED: Hanya check exploit-specific functions, BUKAN debug.traceback
     if(cfg.checkDebugLibrary){
         const checkName=`${varPrefix}_d`;
-        checks.push(`local function ${checkName}() if debug and (debug.getinfo or debug.traceback or debug.setlocal) then return true end if getinfo or getupvalue or setupvalue then return true end return false end`);
+        // debug.traceback ada di Roblox normal - JANGAN check itu
+        // Check hanya untuk exploit functions yang TIDAK ada di Roblox normal
+        checks.push(`local function ${checkName}() if getupvalue or setupvalue or getproto or setproto or getconstant or setconstant then return true end return false end`);
         checks.push(`${checksVar}[#${checksVar}+1]=${checkName}`);
     }
     
     if(cfg.checkHooks){
         const checkName=`${varPrefix}_h`;
-        checks.push(`local function ${checkName}() local t=type if t(t)~="function" then return true end if t(pairs)~="function" then return true end if t(tostring)~="function" then return true end local s=tostring(type) if s:find("native") or s:find("built") then return false end return false end`);
+        // FIXED: Hapus check tostring yang bisa false positive
+        checks.push(`local function ${checkName}() local t=type if t(t)~="function" then return true end if t(pairs)~="function" then return true end return false end`);
         checks.push(`${checksVar}[#${checksVar}+1]=${checkName}`);
     }
     
     if(cfg.checkEnvironment){
         const checkName=`${varPrefix}_e`;
-        checks.push(`local function ${checkName}() if _G.__DEOBF or _G.__DEBUG or _G.__TRACE then return true end if rawget(_G,"__injected") or rawget(_G,"__hooked") then return true end return false end`);
+        // Check untuk known exploit environment variables
+        checks.push(`local function ${checkName}() if rawget(_G,"__DEOBF") or rawget(_G,"__DEBUG") or rawget(_G,"__TRACE") then return true end if rawget(_G,"__injected") or rawget(_G,"__hooked") then return true end return false end`);
         checks.push(`${checksVar}[#${checksVar}+1]=${checkName}`);
     }
     
@@ -192,12 +197,11 @@ export function generateAntiDebugCode(config:Partial<AntiDebugConfig>={}):string
     checks.push(`local function ${runChecks}() for i=1,#${checksVar} do if ${checksVar}[i]() then ${flagVar}=true break end end end`);
     checks.push(`${runChecks}()`);
     
-    // FIXED: Menghapus "while true do end" yang bermasalah
-    // Menggunakan pendekatan yang lebih aman
+    // FIXED: Crash dengan cara yang tidak menyebabkan error terlihat
     if(cfg.crashOnDetect){
-        const crashFunc=`${varPrefix}_x`;
-        // Menggunakan recursive call dengan pcall, lalu error
-        checks.push(`if ${flagVar} then local function ${crashFunc}() ${crashFunc}() end pcall(${crashFunc}) local ${varPrefix}_z=nil ${varPrefix}_z() end`);
+        // Gunakan infinite wait loop - tidak error, hanya freeze
+        // task.wait tersedia di Roblox modern
+        checks.push(`if ${flagVar} then local ${varPrefix}_w=task and task.wait or wait while true do ${varPrefix}_w(9e9) end end`);
     }
     
     return checks.join(' ');
@@ -213,7 +217,8 @@ export function generateAntiTamperCode():string{
     code.push(`local function ${checkVar}(s) local h=0 for i=1,math.min(#s,100) do h=(h*31+string.byte(s,i))%2147483647 end return h end`);
     
     const selfCheckName=`${varPrefix}_self`;
-    code.push(`local function ${selfCheckName}() local info=debug and debug.getinfo and debug.getinfo(1,"S") if info and info.source then local src=info.source if ${checkVar}(src)==0 then return end end end`);
+    // FIXED: Simplified - tidak perlu check debug.getinfo karena mungkin tidak ada
+    code.push(`local function ${selfCheckName}() local ok,info=pcall(function() return debug and debug.getinfo and debug.getinfo(1,"S") end) if ok and info and info.source then local src=info.source if ${checkVar}(src)==0 then return end end end`);
     code.push(`pcall(${selfCheckName})`);
     
     return code.join(' ');
@@ -223,13 +228,9 @@ export function generateRuntimeProtection():string{
     const varPrefix=generateObfuscatedName('_RP');
     const code:string[]=[];
     
-    // FIXED: Menghindari inline table dengan __metatable
-    const mtName=`${varPrefix}_mt`;
-    code.push(`local ${mtName}=setmetatable({},{})`);
-    
+    // FIXED: Simplified version
     const protectGlobals=`${varPrefix}_pg`;
-    // FIXED: Simplified version tanpa complex table construction
-    code.push(`local function ${protectGlobals}() local ok,err=pcall(function() local d=debug if d and d.getinfo then return true end end) end`);
+    code.push(`local function ${protectGlobals}() end`);
     code.push(`pcall(${protectGlobals})`);
     
     return code.join(' ');
