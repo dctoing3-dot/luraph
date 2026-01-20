@@ -1,5 +1,5 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR v0.1.3 - FIXED COLLISIONS + DEBUG MODE
+// NEPHILIM OBFUSCATOR v0.2.0 - PHASE 2: STRING ENCRYPTION
 // ============================================================================
 
 export enum TokenType {
@@ -41,15 +41,10 @@ const KEYWORDS: Record<string, TokenType> = {
 };
 
 // ============================================================================
-// DEBUG LOGGER
+// DEBUG SYSTEM
 // ============================================================================
 
-export interface DebugLog {
-    phase: string;
-    message: string;
-    data?: any;
-}
-
+export interface DebugLog { phase: string; message: string; data?: any; }
 let debugLogs: DebugLog[] = [];
 let debugEnabled = false;
 
@@ -57,15 +52,9 @@ export function enableDebug(enabled: boolean = true): void {
     debugEnabled = enabled;
     debugLogs = [];
 }
-
-export function getDebugLogs(): DebugLog[] {
-    return debugLogs;
-}
-
+export function getDebugLogs(): DebugLog[] { return debugLogs; }
 function debug(phase: string, message: string, data?: any): void {
-    if (debugEnabled) {
-        debugLogs.push({ phase, message, data });
-    }
+    if (debugEnabled) debugLogs.push({ phase, message, data });
 }
 
 // ============================================================================
@@ -81,22 +70,15 @@ export class Lexer {
     private column = 1;
     private startColumn = 1;
 
-    constructor(source: string) { 
-        this.source = source; 
-        debug('LEXER', 'Initialized', { sourceLength: source.length });
-    }
+    constructor(source: string) { this.source = source; }
 
     public tokenize(): Token[] {
-        debug('LEXER', 'Starting tokenization');
-        
         while (!this.isAtEnd()) {
             this.start = this.current;
             this.startColumn = this.column;
             this.scanToken();
         }
-        
         this.tokens.push({ type: TokenType.EOF, value: '', line: this.line, column: this.column });
-        
         debug('LEXER', 'Tokenization complete', { tokenCount: this.tokens.length });
         return this.tokens;
     }
@@ -283,7 +265,7 @@ export class Lexer {
 export function tokenize(source: string): Token[] { return new Lexer(source).tokenize(); }
 
 // ============================================================================
-// RESERVED GLOBALS - NEVER RENAME
+// RESERVED GLOBALS
 // ============================================================================
 
 const RESERVED = new Set([
@@ -316,7 +298,7 @@ const RESERVED = new Set([
 export interface RenameMap { [original: string]: string; }
 
 // ============================================================================
-// NAME GENERATOR - FIXED: NO COLLISIONS
+// NAME GENERATOR
 // ============================================================================
 
 class NameGenerator {
@@ -325,12 +307,8 @@ class NameGenerator {
     
     generate(): string {
         let name: string;
-        do {
-            name = this.createName(this.counter++);
-        } while (this.usedNames.has(name));
-        
+        do { name = this.createName(this.counter++); } while (this.usedNames.has(name));
         this.usedNames.add(name);
-        debug('NAMEGEN', `Generated unique name`, { index: this.counter - 1, name });
         return name;
     }
     
@@ -338,218 +316,212 @@ class NameGenerator {
         const chars = ['I', 'l'];
         let name = '';
         let num = index;
-        
-        // Convert index to binary-like representation using I and l
-        do {
-            name = chars[num % 2] + name;
-            num = Math.floor(num / 2);
-        } while (num > 0);
-        
-        // Pad to minimum 8 characters for better obfuscation
+        do { name = chars[num % 2] + name; num = Math.floor(num / 2); } while (num > 0);
         while (name.length < 8) {
-            // Use index-based padding to ensure uniqueness
             const padIndex = (index + name.length) % 2;
             name = chars[padIndex] + name;
         }
-        
         return name;
     }
-    
-    reset(): void {
-        this.usedNames.clear();
-        this.counter = 0;
-    }
 }
 
 // ============================================================================
-// SMART SCOPE ANALYSIS
+// IDENTIFIER ANALYSIS
 // ============================================================================
 
-interface IdentifierInfo {
-    name: string;
-    line: number;
-    tokenIndex: number;
-    isLocal: boolean;
-    reason: string;
-}
-
-function analyzeIdentifiers(tokens: Token[]): IdentifierInfo[] {
-    const identifiers: IdentifierInfo[] = [];
-    
-    debug('ANALYZE', 'Starting identifier analysis', { tokenCount: tokens.length });
+function analyzeIdentifiers(tokens: Token[]): Set<string> {
+    const localVars = new Set<string>();
     
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
-        
         if (t.type !== TokenType.IDENTIFIER) continue;
-        if (RESERVED.has(t.value)) {
-            debug('ANALYZE', `Skipping reserved: ${t.value}`, { line: t.line });
-            continue;
-        }
+        if (RESERVED.has(t.value)) continue;
         
         const prev = tokens[i - 1];
         const prev2 = tokens[i - 2];
         const next = tokens[i + 1];
         
-        // Skip property access (obj.prop) or method call (obj:method)
-        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) {
-            debug('ANALYZE', `Skipping property/method: ${t.value}`, { line: t.line });
-            continue;
-        }
+        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) continue;
         
-        // Skip table key inside {}
         let braceDepth = 0;
         for (let j = 0; j < i; j++) {
             if (tokens[j].type === TokenType.LBRACE) braceDepth++;
             if (tokens[j].type === TokenType.RBRACE) braceDepth--;
         }
-        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) {
-            debug('ANALYZE', `Skipping table key: ${t.value}`, { line: t.line });
-            continue;
-        }
+        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) continue;
         
-        // Detect local declarations
         let isLocal = false;
-        let reason = '';
         
-        // Pattern: local VAR
-        if (prev && prev.type === TokenType.LOCAL) {
-            isLocal = true;
-            reason = 'local declaration';
-        }
+        if (prev && prev.type === TokenType.LOCAL) isLocal = true;
         
-        // Pattern: local VAR, VAR, VAR
         if (!isLocal && prev && prev.type === TokenType.COMMA) {
             for (let j = i - 1; j >= 0; j--) {
-                if (tokens[j].type === TokenType.LOCAL) { 
-                    isLocal = true; 
-                    reason = 'local multi-declaration';
-                    break; 
-                }
-                if (tokens[j].type === TokenType.ASSIGN) break;
-                if (tokens[j].line < t.line) break;
+                if (tokens[j].type === TokenType.LOCAL) { isLocal = true; break; }
+                if (tokens[j].type === TokenType.ASSIGN || tokens[j].line < t.line) break;
             }
         }
         
-        // Pattern: local function NAME
         if (!isLocal && prev && prev.type === TokenType.FUNCTION && prev2 && prev2.type === TokenType.LOCAL) {
             isLocal = true;
-            reason = 'local function';
         }
         
-        // Pattern: function params (NAME, NAME)
         if (!isLocal) {
             let parenDepth = 0;
-            let foundFunction = false;
-            
             for (let j = i - 1; j >= 0; j--) {
                 const tk = tokens[j];
                 if (tk.type === TokenType.RPAREN) parenDepth++;
                 if (tk.type === TokenType.LPAREN) {
                     parenDepth--;
                     if (parenDepth < 0) {
-                        // Check if this ( is after function keyword
                         for (let k = j - 1; k >= 0; k--) {
-                            if (tokens[k].type === TokenType.FUNCTION) {
-                                foundFunction = true;
-                                break;
-                            }
-                            if (tokens[k].type === TokenType.RPAREN || 
-                                tokens[k].type === TokenType.END ||
-                                tokens[k].line < tokens[j].line) break;
+                            if (tokens[k].type === TokenType.FUNCTION) { isLocal = true; break; }
+                            if (tokens[k].type === TokenType.RPAREN || tokens[k].type === TokenType.END) break;
                         }
                         break;
                     }
                 }
                 if (tk.line < t.line - 1) break;
             }
-            
-            if (foundFunction) {
-                isLocal = true;
-                reason = 'function parameter';
-            }
         }
         
-        if (isLocal) {
-            identifiers.push({
-                name: t.value,
-                line: t.line,
-                tokenIndex: i,
-                isLocal: true,
-                reason
-            });
-            debug('ANALYZE', `Found local var: ${t.value}`, { line: t.line, reason });
-        }
+        if (isLocal) localVars.add(t.value);
     }
     
-    return identifiers;
+    return localVars;
 }
 
 export function createRenameMap(tokens: Token[]): RenameMap {
     const map: RenameMap = {};
     const generator = new NameGenerator();
-    const seenNames = new Set<string>();
+    const localVars = analyzeIdentifiers(tokens);
     
-    debug('RENAME', 'Creating rename map');
-    
-    const identifiers = analyzeIdentifiers(tokens);
-    
-    for (const info of identifiers) {
-        if (!seenNames.has(info.name)) {
-            seenNames.add(info.name);
-            const newName = generator.generate();
-            map[info.name] = newName;
-            debug('RENAME', `Mapping: ${info.name} → ${newName}`, { reason: info.reason });
-        }
+    for (const name of localVars) {
+        map[name] = generator.generate();
+        debug('RENAME', `${name} → ${map[name]}`);
     }
     
-    debug('RENAME', 'Rename map complete', { count: Object.keys(map).length });
     return map;
 }
-
-// ============================================================================
-// APPLY RENAMING
-// ============================================================================
 
 export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
     const result: Token[] = [];
     
-    debug('APPLY', 'Applying rename map');
-    
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
-        
-        if (t.type !== TokenType.IDENTIFIER || !map[t.value]) {
-            result.push(t);
-            continue;
-        }
+        if (t.type !== TokenType.IDENTIFIER || !map[t.value]) { result.push(t); continue; }
         
         const prev = tokens[i - 1];
         const next = tokens[i + 1];
         
-        // Don't rename property access or method calls
-        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) {
-            result.push(t);
-            continue;
-        }
+        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) { result.push(t); continue; }
         
-        // Don't rename table keys
         let braceDepth = 0;
         for (let j = 0; j < i; j++) {
             if (tokens[j].type === TokenType.LBRACE) braceDepth++;
             if (tokens[j].type === TokenType.RBRACE) braceDepth--;
         }
-        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) {
-            result.push(t);
-            continue;
-        }
+        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) { result.push(t); continue; }
         
-        // Rename!
-        debug('APPLY', `Renaming: ${t.value} → ${map[t.value]}`, { line: t.line });
         result.push({ ...t, value: map[t.value], literal: map[t.value] });
     }
     
     return result;
+}
+
+// ============================================================================
+// STRING ENCRYPTION (XOR)
+// ============================================================================
+
+export interface StringEncryptionResult {
+    encryptedStrings: Map<string, { encrypted: string; key: number }>;
+    decryptorName: string;
+    decryptorCode: string;
+}
+
+function generateXorKey(): number {
+    // Random key between 0x10 and 0xFF (avoid 0 which does nothing)
+    return Math.floor(Math.random() * 0xEF) + 0x10;
+}
+
+function xorEncrypt(str: string, key: number): string {
+    let result = '';
+    for (let i = 0; i < str.length; i++) {
+        const charCode = str.charCodeAt(i);
+        const encrypted = charCode ^ key;
+        result += '\\x' + encrypted.toString(16).padStart(2, '0');
+    }
+    return result;
+}
+
+function generateDecryptorName(): string {
+    const chars = ['I', 'l', '_'];
+    let name = '_';
+    for (let i = 0; i < 3; i++) {
+        name += chars[Math.floor(Math.random() * 2)];
+    }
+    name += '_';
+    return name;
+}
+
+export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: StringEncryptionResult } {
+    const encryptedStrings = new Map<string, { encrypted: string; key: number }>();
+    const decryptorName = generateDecryptorName();
+    const globalKey = generateXorKey();
+    
+    debug('ENCRYPT', `Using global XOR key: 0x${globalKey.toString(16)}`);
+    debug('ENCRYPT', `Decryptor function name: ${decryptorName}`);
+    
+    const result: Token[] = [];
+    let stringCount = 0;
+    
+    for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        
+        if (t.type === TokenType.STRING && t.literal && t.literal.length > 0) {
+            const original = t.literal as string;
+            
+            // Skip very short strings (1-2 chars) - not worth encrypting
+            if (original.length <= 2) {
+                result.push(t);
+                continue;
+            }
+            
+            const encrypted = xorEncrypt(original, globalKey);
+            encryptedStrings.set(original, { encrypted, key: globalKey });
+            
+            debug('ENCRYPT', `String encrypted`, { 
+                original: original.substring(0, 30) + (original.length > 30 ? '...' : ''),
+                length: original.length 
+            });
+            
+            // Replace string token with decryptor call
+            // _D_("encrypted", key)
+            result.push({ type: TokenType.IDENTIFIER, value: decryptorName, line: t.line, column: t.column });
+            result.push({ type: TokenType.LPAREN, value: '(', line: t.line, column: t.column });
+            result.push({ type: TokenType.STRING, value: `"${encrypted}"`, literal: encrypted, line: t.line, column: t.column });
+            result.push({ type: TokenType.COMMA, value: ',', line: t.line, column: t.column });
+            result.push({ type: TokenType.NUMBER, value: `0x${globalKey.toString(16)}`, literal: globalKey, line: t.line, column: t.column });
+            result.push({ type: TokenType.RPAREN, value: ')', line: t.line, column: t.column });
+            
+            stringCount++;
+        } else {
+            result.push(t);
+        }
+    }
+    
+    debug('ENCRYPT', `Total strings encrypted: ${stringCount}`);
+    
+    // Generate decryptor function code
+    const decryptorCode = `local ${decryptorName}=function(s,k)local r=""for i=1,#s do r=r..string.char(bit32.bxor(string.byte(s,i),k))end return r end`;
+    
+    return {
+        tokens: result,
+        encryption: {
+            encryptedStrings,
+            decryptorName,
+            decryptorCode
+        }
+    };
 }
 
 // ============================================================================
@@ -575,22 +547,12 @@ const SPACE_BEFORE = new Set([
     TokenType.IN, TokenType.UNTIL, TokenType.REPEAT, TokenType.ELSEIF
 ]);
 
-const NO_SPACE_AFTER = new Set([
-    TokenType.LPAREN, TokenType.LBRACE, TokenType.LBRACKET, 
-    TokenType.DOT, TokenType.COLON, TokenType.HASH
-]);
+const NO_SPACE_AFTER = new Set([TokenType.LPAREN, TokenType.LBRACE, TokenType.LBRACKET, TokenType.DOT, TokenType.COLON, TokenType.HASH]);
+const NO_SPACE_BEFORE = new Set([TokenType.RPAREN, TokenType.RBRACE, TokenType.RBRACKET, TokenType.DOT, TokenType.COLON, TokenType.COMMA, TokenType.SEMICOLON, TokenType.LPAREN, TokenType.LBRACKET]);
 
-const NO_SPACE_BEFORE = new Set([
-    TokenType.RPAREN, TokenType.RBRACE, TokenType.RBRACKET, 
-    TokenType.DOT, TokenType.COLON, TokenType.COMMA, 
-    TokenType.SEMICOLON, TokenType.LPAREN, TokenType.LBRACKET
-]);
-
-export function tokensToCode(tokens: Token[]): string {
-    let code = '';
+export function tokensToCode(tokens: Token[], prependCode: string = ''): string {
+    let code = prependCode ? prependCode + '\n' : '';
     let lastLine = 1;
-    
-    debug('CODEGEN', 'Generating code from tokens');
     
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
@@ -601,26 +563,29 @@ export function tokensToCode(tokens: Token[]): string {
             code += '\n'.repeat(t.line - lastLine);
             lastLine = t.line;
         } else if (prev && prev.type !== TokenType.EOF) {
-            const needsSpace = !NO_SPACE_AFTER.has(prev.type) && 
-                              !NO_SPACE_BEFORE.has(t.type) &&
-                              (SPACE_AFTER.has(prev.type) || SPACE_BEFORE.has(t.type));
+            const needsSpace = !NO_SPACE_AFTER.has(prev.type) && !NO_SPACE_BEFORE.has(t.type) &&
+                (SPACE_AFTER.has(prev.type) || SPACE_BEFORE.has(t.type));
             if (needsSpace) code += ' ';
         }
         
         if (t.type === TokenType.STRING) {
-            const esc = t.literal
-                .replace(/\\/g, '\\\\')
-                .replace(/"/g, '\\"')
-                .replace(/\n/g, '\\n')
-                .replace(/\r/g, '\\r')
-                .replace(/\t/g, '\\t');
-            code += '"' + esc + '"';
+            // Check if already escaped (from encryption)
+            if (t.value.startsWith('"') && t.value.endsWith('"')) {
+                code += t.value;
+            } else {
+                const esc = (t.literal || '')
+                    .replace(/\\/g, '\\\\')
+                    .replace(/"/g, '\\"')
+                    .replace(/\n/g, '\\n')
+                    .replace(/\r/g, '\\r')
+                    .replace(/\t/g, '\\t');
+                code += '"' + esc + '"';
+            }
         } else {
             code += t.value;
         }
     }
     
-    debug('CODEGEN', 'Code generation complete', { length: code.length });
     return code;
 }
 
@@ -630,6 +595,8 @@ export function tokensToCode(tokens: Token[]): string {
 
 export interface ObfuscateOptions {
     debug?: boolean;
+    renameVariables?: boolean;
+    encryptStrings?: boolean;
 }
 
 export interface ObfuscateResult {
@@ -638,6 +605,7 @@ export interface ObfuscateResult {
     stats: {
         originalTokens: number;
         identifiersRenamed: number;
+        stringsEncrypted: number;
         originalLength: number;
         outputLength: number;
         timeMs: number;
@@ -648,35 +616,59 @@ export interface ObfuscateResult {
 export function obfuscate(source: string, options: ObfuscateOptions = {}): ObfuscateResult {
     const startTime = Date.now();
     
-    // Reset and enable debug if requested
-    enableDebug(options.debug || false);
+    // Defaults
+    const opts = {
+        debug: options.debug ?? false,
+        renameVariables: options.renameVariables ?? true,
+        encryptStrings: options.encryptStrings ?? true
+    };
     
-    debug('MAIN', 'Starting obfuscation', { sourceLength: source.length });
+    enableDebug(opts.debug);
+    debug('MAIN', 'Starting obfuscation', { options: opts });
     
-    const tokens = tokenize(source);
-    const map = createRenameMap(tokens);
-    const renamed = applyRenameMap(tokens, map);
-    const code = tokensToCode(renamed);
+    // Step 1: Tokenize
+    let tokens = tokenize(source);
+    debug('MAIN', 'Tokenization complete', { tokenCount: tokens.length });
+    
+    // Step 2: Rename variables
+    let renameMap: RenameMap = {};
+    if (opts.renameVariables) {
+        renameMap = createRenameMap(tokens);
+        tokens = applyRenameMap(tokens, renameMap);
+        debug('MAIN', 'Renaming complete', { renamed: Object.keys(renameMap).length });
+    }
+    
+    // Step 3: Encrypt strings
+    let stringsEncrypted = 0;
+    let prependCode = '';
+    if (opts.encryptStrings) {
+        const encResult = encryptStrings(tokens);
+        tokens = encResult.tokens;
+        prependCode = encResult.encryption.decryptorCode;
+        stringsEncrypted = encResult.encryption.encryptedStrings.size;
+        debug('MAIN', 'String encryption complete', { encrypted: stringsEncrypted });
+    }
+    
+    // Step 4: Generate code
+    const code = tokensToCode(tokens, prependCode);
     
     const endTime = Date.now();
-    
     debug('MAIN', 'Obfuscation complete', { timeMs: endTime - startTime });
     
     const result: ObfuscateResult = {
         code,
-        map,
+        map: renameMap,
         stats: {
-            originalTokens: tokens.length,
-            identifiersRenamed: Object.keys(map).length,
+            originalTokens: tokenize(source).length,
+            identifiersRenamed: Object.keys(renameMap).length,
+            stringsEncrypted,
             originalLength: source.length,
             outputLength: code.length,
             timeMs: endTime - startTime
         }
     };
     
-    if (options.debug) {
-        result.debugLogs = getDebugLogs();
-    }
+    if (opts.debug) result.debugLogs = getDebugLogs();
     
     return result;
-                        }
+    }
