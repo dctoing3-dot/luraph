@@ -1,5 +1,5 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR v0.1.2 - FULLY FIXED
+// NEPHILIM OBFUSCATOR v0.1.3 - FIXED COLLISIONS + DEBUG MODE
 // ============================================================================
 
 export enum TokenType {
@@ -41,6 +41,34 @@ const KEYWORDS: Record<string, TokenType> = {
 };
 
 // ============================================================================
+// DEBUG LOGGER
+// ============================================================================
+
+export interface DebugLog {
+    phase: string;
+    message: string;
+    data?: any;
+}
+
+let debugLogs: DebugLog[] = [];
+let debugEnabled = false;
+
+export function enableDebug(enabled: boolean = true): void {
+    debugEnabled = enabled;
+    debugLogs = [];
+}
+
+export function getDebugLogs(): DebugLog[] {
+    return debugLogs;
+}
+
+function debug(phase: string, message: string, data?: any): void {
+    if (debugEnabled) {
+        debugLogs.push({ phase, message, data });
+    }
+}
+
+// ============================================================================
 // LEXER
 // ============================================================================
 
@@ -53,15 +81,23 @@ export class Lexer {
     private column = 1;
     private startColumn = 1;
 
-    constructor(source: string) { this.source = source; }
+    constructor(source: string) { 
+        this.source = source; 
+        debug('LEXER', 'Initialized', { sourceLength: source.length });
+    }
 
     public tokenize(): Token[] {
+        debug('LEXER', 'Starting tokenization');
+        
         while (!this.isAtEnd()) {
             this.start = this.current;
             this.startColumn = this.column;
             this.scanToken();
         }
+        
         this.tokens.push({ type: TokenType.EOF, value: '', line: this.line, column: this.column });
+        
+        debug('LEXER', 'Tokenization complete', { tokenCount: this.tokens.length });
         return this.tokens;
     }
 
@@ -280,100 +316,194 @@ const RESERVED = new Set([
 export interface RenameMap { [original: string]: string; }
 
 // ============================================================================
-// NAME GENERATOR
+// NAME GENERATOR - FIXED: NO COLLISIONS
 // ============================================================================
 
-const CHARS = ['I', 'l'];
-function genName(index: number): string {
-    let name = '';
-    let num = index;
-    do { name = CHARS[num % 2] + name; num = Math.floor(num / 2); } while (num > 0);
-    while (name.length < 6) name = CHARS[Math.floor(Math.random() * 2)] + name;
-    name += CHARS[Math.floor(Math.random() * 2)] + CHARS[Math.floor(Math.random() * 2)];
-    return name;
+class NameGenerator {
+    private usedNames = new Set<string>();
+    private counter = 0;
+    
+    generate(): string {
+        let name: string;
+        do {
+            name = this.createName(this.counter++);
+        } while (this.usedNames.has(name));
+        
+        this.usedNames.add(name);
+        debug('NAMEGEN', `Generated unique name`, { index: this.counter - 1, name });
+        return name;
+    }
+    
+    private createName(index: number): string {
+        const chars = ['I', 'l'];
+        let name = '';
+        let num = index;
+        
+        // Convert index to binary-like representation using I and l
+        do {
+            name = chars[num % 2] + name;
+            num = Math.floor(num / 2);
+        } while (num > 0);
+        
+        // Pad to minimum 8 characters for better obfuscation
+        while (name.length < 8) {
+            // Use index-based padding to ensure uniqueness
+            const padIndex = (index + name.length) % 2;
+            name = chars[padIndex] + name;
+        }
+        
+        return name;
+    }
+    
+    reset(): void {
+        this.usedNames.clear();
+        this.counter = 0;
+    }
 }
 
 // ============================================================================
 // SMART SCOPE ANALYSIS
 // ============================================================================
 
-export function createRenameMap(tokens: Token[]): RenameMap {
-    const map: RenameMap = {};
-    const localVars = new Set<string>();
-    let counter = 0;
+interface IdentifierInfo {
+    name: string;
+    line: number;
+    tokenIndex: number;
+    isLocal: boolean;
+    reason: string;
+}
 
+function analyzeIdentifiers(tokens: Token[]): IdentifierInfo[] {
+    const identifiers: IdentifierInfo[] = [];
+    
+    debug('ANALYZE', 'Starting identifier analysis', { tokenCount: tokens.length });
+    
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         
         if (t.type !== TokenType.IDENTIFIER) continue;
-        if (RESERVED.has(t.value)) continue;
+        if (RESERVED.has(t.value)) {
+            debug('ANALYZE', `Skipping reserved: ${t.value}`, { line: t.line });
+            continue;
+        }
         
         const prev = tokens[i - 1];
         const prev2 = tokens[i - 2];
         const next = tokens[i + 1];
         
-        // Skip: property access (obj.prop) or method call (obj:method)
-        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) continue;
+        // Skip property access (obj.prop) or method call (obj:method)
+        if (prev && (prev.type === TokenType.DOT || prev.type === TokenType.COLON)) {
+            debug('ANALYZE', `Skipping property/method: ${t.value}`, { line: t.line });
+            continue;
+        }
         
-        // Skip: table key inside {} (e.g., {Key = value})
+        // Skip table key inside {}
         let braceDepth = 0;
         for (let j = 0; j < i; j++) {
             if (tokens[j].type === TokenType.LBRACE) braceDepth++;
             if (tokens[j].type === TokenType.RBRACE) braceDepth--;
         }
-        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) continue;
+        if (braceDepth > 0 && next && next.type === TokenType.ASSIGN) {
+            debug('ANALYZE', `Skipping table key: ${t.value}`, { line: t.line });
+            continue;
+        }
         
-        // Detect: local x, local function x, function params
+        // Detect local declarations
         let isLocal = false;
+        let reason = '';
         
         // Pattern: local VAR
-        if (prev && prev.type === TokenType.LOCAL) isLocal = true;
+        if (prev && prev.type === TokenType.LOCAL) {
+            isLocal = true;
+            reason = 'local declaration';
+        }
         
-        // Pattern: local VAR, VAR, VAR (multiple declaration)
-        if (prev && prev.type === TokenType.COMMA) {
+        // Pattern: local VAR, VAR, VAR
+        if (!isLocal && prev && prev.type === TokenType.COMMA) {
             for (let j = i - 1; j >= 0; j--) {
-                if (tokens[j].type === TokenType.LOCAL) { isLocal = true; break; }
+                if (tokens[j].type === TokenType.LOCAL) { 
+                    isLocal = true; 
+                    reason = 'local multi-declaration';
+                    break; 
+                }
                 if (tokens[j].type === TokenType.ASSIGN) break;
                 if (tokens[j].line < t.line) break;
             }
         }
         
         // Pattern: local function NAME
-        if (prev && prev.type === TokenType.FUNCTION && prev2 && prev2.type === TokenType.LOCAL) isLocal = true;
-        
-        // Pattern: function params - identifier inside () after function keyword
-        if (prev && prev.type === TokenType.LPAREN) {
-            // Check if this ( is after function keyword
-            for (let j = i - 2; j >= 0; j--) {
-                if (tokens[j].type === TokenType.FUNCTION) { isLocal = true; break; }
-                if (tokens[j].type === TokenType.RPAREN || tokens[j].line < tokens[i-1].line) break;
-            }
+        if (!isLocal && prev && prev.type === TokenType.FUNCTION && prev2 && prev2.type === TokenType.LOCAL) {
+            isLocal = true;
+            reason = 'local function';
         }
         
-        // Pattern: function params - identifier after comma inside function ()
-        if (prev && prev.type === TokenType.COMMA) {
+        // Pattern: function params (NAME, NAME)
+        if (!isLocal) {
             let parenDepth = 0;
+            let foundFunction = false;
+            
             for (let j = i - 1; j >= 0; j--) {
-                if (tokens[j].type === TokenType.RPAREN) parenDepth++;
-                if (tokens[j].type === TokenType.LPAREN) {
+                const tk = tokens[j];
+                if (tk.type === TokenType.RPAREN) parenDepth++;
+                if (tk.type === TokenType.LPAREN) {
                     parenDepth--;
-                    if (parenDepth < 0 && j > 0 && tokens[j - 1].type === TokenType.FUNCTION) {
-                        isLocal = true;
+                    if (parenDepth < 0) {
+                        // Check if this ( is after function keyword
+                        for (let k = j - 1; k >= 0; k--) {
+                            if (tokens[k].type === TokenType.FUNCTION) {
+                                foundFunction = true;
+                                break;
+                            }
+                            if (tokens[k].type === TokenType.RPAREN || 
+                                tokens[k].type === TokenType.END ||
+                                tokens[k].line < tokens[j].line) break;
+                        }
                         break;
                     }
                 }
+                if (tk.line < t.line - 1) break;
+            }
+            
+            if (foundFunction) {
+                isLocal = true;
+                reason = 'function parameter';
             }
         }
         
-        if (isLocal && !localVars.has(t.value)) {
-            localVars.add(t.value);
+        if (isLocal) {
+            identifiers.push({
+                name: t.value,
+                line: t.line,
+                tokenIndex: i,
+                isLocal: true,
+                reason
+            });
+            debug('ANALYZE', `Found local var: ${t.value}`, { line: t.line, reason });
         }
     }
     
-    for (const name of localVars) {
-        map[name] = genName(counter++);
+    return identifiers;
+}
+
+export function createRenameMap(tokens: Token[]): RenameMap {
+    const map: RenameMap = {};
+    const generator = new NameGenerator();
+    const seenNames = new Set<string>();
+    
+    debug('RENAME', 'Creating rename map');
+    
+    const identifiers = analyzeIdentifiers(tokens);
+    
+    for (const info of identifiers) {
+        if (!seenNames.has(info.name)) {
+            seenNames.add(info.name);
+            const newName = generator.generate();
+            map[info.name] = newName;
+            debug('RENAME', `Mapping: ${info.name} → ${newName}`, { reason: info.reason });
+        }
     }
     
+    debug('RENAME', 'Rename map complete', { count: Object.keys(map).length });
     return map;
 }
 
@@ -383,6 +513,8 @@ export function createRenameMap(tokens: Token[]): RenameMap {
 
 export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
     const result: Token[] = [];
+    
+    debug('APPLY', 'Applying rename map');
     
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
@@ -413,6 +545,7 @@ export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
         }
         
         // Rename!
+        debug('APPLY', `Renaming: ${t.value} → ${map[t.value]}`, { line: t.line });
         result.push({ ...t, value: map[t.value], literal: map[t.value] });
     }
     
@@ -442,12 +575,22 @@ const SPACE_BEFORE = new Set([
     TokenType.IN, TokenType.UNTIL, TokenType.REPEAT, TokenType.ELSEIF
 ]);
 
-const NO_SPACE_AFTER = new Set([TokenType.LPAREN, TokenType.LBRACE, TokenType.LBRACKET, TokenType.DOT, TokenType.COLON, TokenType.HASH]);
-const NO_SPACE_BEFORE = new Set([TokenType.RPAREN, TokenType.RBRACE, TokenType.RBRACKET, TokenType.DOT, TokenType.COLON, TokenType.COMMA, TokenType.SEMICOLON, TokenType.LPAREN, TokenType.LBRACKET]);
+const NO_SPACE_AFTER = new Set([
+    TokenType.LPAREN, TokenType.LBRACE, TokenType.LBRACKET, 
+    TokenType.DOT, TokenType.COLON, TokenType.HASH
+]);
+
+const NO_SPACE_BEFORE = new Set([
+    TokenType.RPAREN, TokenType.RBRACE, TokenType.RBRACKET, 
+    TokenType.DOT, TokenType.COLON, TokenType.COMMA, 
+    TokenType.SEMICOLON, TokenType.LPAREN, TokenType.LBRACKET
+]);
 
 export function tokensToCode(tokens: Token[]): string {
     let code = '';
     let lastLine = 1;
+    
+    debug('CODEGEN', 'Generating code from tokens');
     
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
@@ -458,45 +601,82 @@ export function tokensToCode(tokens: Token[]): string {
             code += '\n'.repeat(t.line - lastLine);
             lastLine = t.line;
         } else if (prev && prev.type !== TokenType.EOF) {
-            const needsSpace = !NO_SPACE_AFTER.has(prev.type) && !NO_SPACE_BEFORE.has(t.type) &&
-                (SPACE_AFTER.has(prev.type) || SPACE_BEFORE.has(t.type));
+            const needsSpace = !NO_SPACE_AFTER.has(prev.type) && 
+                              !NO_SPACE_BEFORE.has(t.type) &&
+                              (SPACE_AFTER.has(prev.type) || SPACE_BEFORE.has(t.type));
             if (needsSpace) code += ' ';
         }
         
         if (t.type === TokenType.STRING) {
-            const esc = t.literal.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-                .replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+            const esc = t.literal
+                .replace(/\\/g, '\\\\')
+                .replace(/"/g, '\\"')
+                .replace(/\n/g, '\\n')
+                .replace(/\r/g, '\\r')
+                .replace(/\t/g, '\\t');
             code += '"' + esc + '"';
         } else {
             code += t.value;
         }
     }
+    
+    debug('CODEGEN', 'Code generation complete', { length: code.length });
     return code;
 }
 
 // ============================================================================
-// MAIN OBFUSCATE
+// MAIN OBFUSCATE FUNCTION
 // ============================================================================
+
+export interface ObfuscateOptions {
+    debug?: boolean;
+}
 
 export interface ObfuscateResult {
     code: string;
     map: RenameMap;
-    stats: { originalTokens: number; identifiersRenamed: number; originalLength: number; outputLength: number; };
+    stats: {
+        originalTokens: number;
+        identifiersRenamed: number;
+        originalLength: number;
+        outputLength: number;
+        timeMs: number;
+    };
+    debugLogs?: DebugLog[];
 }
 
-export function obfuscate(source: string): ObfuscateResult {
+export function obfuscate(source: string, options: ObfuscateOptions = {}): ObfuscateResult {
+    const startTime = Date.now();
+    
+    // Reset and enable debug if requested
+    enableDebug(options.debug || false);
+    
+    debug('MAIN', 'Starting obfuscation', { sourceLength: source.length });
+    
     const tokens = tokenize(source);
     const map = createRenameMap(tokens);
     const renamed = applyRenameMap(tokens, map);
     const code = tokensToCode(renamed);
-    return {
+    
+    const endTime = Date.now();
+    
+    debug('MAIN', 'Obfuscation complete', { timeMs: endTime - startTime });
+    
+    const result: ObfuscateResult = {
         code,
         map,
         stats: {
             originalTokens: tokens.length,
             identifiersRenamed: Object.keys(map).length,
             originalLength: source.length,
-            outputLength: code.length
+            outputLength: code.length,
+            timeMs: endTime - startTime
         }
     };
-}
+    
+    if (options.debug) {
+        result.debugLogs = getDebugLogs();
+    }
+    
+    return result;
+                        }
