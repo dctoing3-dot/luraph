@@ -1,5 +1,5 @@
 // ============================================================================
-// NEPHILIM OBFUSCATOR v0.3.0 - PHASE 3: NUMBER OBFUSCATION
+// NEPHILIM OBFUSCATOR v0.3.1 - PHASE 3: NUMBER OBFUSCATION (FIXED)
 // ============================================================================
 
 export enum TokenType {
@@ -429,7 +429,7 @@ export function applyRenameMap(tokens: Token[], map: RenameMap): Token[] {
 }
 
 // ============================================================================
-// STRING ENCRYPTION (XOR) - PHASE 2
+// STRING ENCRYPTION (XOR) - PHASE 2 [FIXED]
 // ============================================================================
 
 export interface StringEncryptionResult {
@@ -439,26 +439,31 @@ export interface StringEncryptionResult {
 }
 
 function generateXorKey(): number {
-    return Math.floor(Math.random() * 0xEF) + 0x10;
+    // Key antara 1-127 agar hasil XOR tetap dalam range printable atau safe
+    return Math.floor(Math.random() * 126) + 1;
 }
 
+/**
+ * FIXED: Menggunakan DECIMAL escape sequence, bukan octal!
+ * Lua \ddd = DECIMAL (0-255), bukan octal
+ */
 function xorEncrypt(str: string, key: number): string {
     let result = '';
     for (let i = 0; i < str.length; i++) {
         const charCode = str.charCodeAt(i);
-        const encrypted = charCode ^ key;
-        result += '\\' + encrypted.toString(8).padStart(3, '0');
+        const encrypted = (charCode ^ key) & 0xFF; // Pastikan 0-255
+        // Gunakan decimal escape sequence (Lua standard)
+        result += '\\' + encrypted.toString(10);
     }
     return result;
 }
 
 function generateObfuscatedName(prefix: string = ''): string {
-    const chars = ['I', 'l', '_'];
+    const chars = ['I', 'l'];
     let name = prefix || '_';
     for (let i = 0; i < 4; i++) {
         name += chars[Math.floor(Math.random() * 2)];
     }
-    name += '_';
     return name;
 }
 
@@ -467,7 +472,7 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     const decryptorName = generateObfuscatedName('_S');
     const globalKey = generateXorKey();
     
-    debug('ENCRYPT', `Using global XOR key: 0x${globalKey.toString(16)}`);
+    debug('ENCRYPT', `Using global XOR key: ${globalKey}`);
     debug('ENCRYPT', `Decryptor function name: ${decryptorName}`);
     
     const result: Token[] = [];
@@ -479,6 +484,7 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
         if (t.type === TokenType.STRING && t.literal && t.literal.length > 0) {
             const original = t.literal as string;
             
+            // Skip string pendek
             if (original.length <= 2) {
                 result.push(t);
                 continue;
@@ -507,8 +513,8 @@ export function encryptStrings(tokens: Token[]): { tokens: Token[]; encryption: 
     
     debug('ENCRYPT', `Total strings encrypted: ${stringCount}`);
     
-    // Luau-compatible decryptor using bit32
-    const decryptorCode = `local ${decryptorName}=(function(s,k)local r=""for i=1,#s do r=r..string.char(bit32.bxor(string.byte(s,i),k))end return r end)`;
+    // Decryptor yang kompatibel dengan Luau/Roblox
+    const decryptorCode = `local function ${decryptorName}(s,k) local r="" for i=1,#s do local c=string.byte(s,i) local x=bit32 and bit32.bxor or function(a,b) local p,c=1,0 while a>0 and b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a,b,p=(a-ra)/2,(b-rb)/2,p*2 end if a<b then a=b end while a>0 do local ra=a%2 if ra>0 then c=c+p end a,p=(a-ra)/2,p*2 end return c end r=r..string.char(x(c,k)) end return r end`;
     
     return {
         tokens: result,
@@ -535,34 +541,27 @@ const DEFAULT_NUMBER_CONFIG: NumberObfuscationConfig = {
     complexity: 'medium',
     useBitwise: true,
     useMathFunctions: true,
-    maxDepth: 3
+    maxDepth: 2
 };
 
 class NumberObfuscator {
     private config: NumberObfuscationConfig;
-    private mathCacheName: string;
-    private usedMathFuncs: Set<string> = new Set();
     
     constructor(config: Partial<NumberObfuscationConfig> = {}) {
         this.config = { ...DEFAULT_NUMBER_CONFIG, ...config };
-        this.mathCacheName = generateObfuscatedName('_M');
     }
     
-    /**
-     * Generates obfuscated expression for a number
-     */
     obfuscateNumber(num: number, depth: number = 0): string {
         // Handle special cases
-        if (num !== num) return '(0/0)'; // NaN
+        if (Number.isNaN(num)) return '(0/0)';
         if (num === Infinity) return '(1/0)';
         if (num === -Infinity) return '(-1/0)';
         
-        // Base case or simple numbers
+        // Base case
         if (depth >= this.config.maxDepth) {
             return this.generateBaseExpression(num);
         }
         
-        // Choose obfuscation strategy based on number type
         if (Number.isInteger(num)) {
             return this.obfuscateInteger(num, depth);
         } else {
@@ -570,116 +569,80 @@ class NumberObfuscator {
         }
     }
     
-    /**
-     * Obfuscate integer values
-     */
     private obfuscateInteger(num: number, depth: number): string {
         const strategies: (() => string)[] = [];
+        const absNum = Math.abs(num);
+        const sign = num < 0 ? '-' : '';
         
-        // Strategy 1: Addition/Subtraction decomposition
+        // Strategy 1: Addition decomposition
         strategies.push(() => {
-            const a = Math.floor(Math.random() * 1000) - 500;
+            const a = Math.floor(Math.random() * 200) - 100;
             const b = num - a;
-            if (depth === 0) {
-                return `(${this.obfuscateNumber(a, depth + 1)}+${this.obfuscateNumber(b, depth + 1)})`;
-            }
-            return `(${a}+${b})`;
+            return `(${a >= 0 ? a : '(' + a + ')'}+${b >= 0 ? b : '(' + b + ')'})`;
         });
         
-        // Strategy 2: Multiplication/Division
+        // Strategy 2: Subtraction
+        strategies.push(() => {
+            const a = num + Math.floor(Math.random() * 200) + 50;
+            const b = a - num;
+            return `(${a}-${b})`;
+        });
+        
+        // Strategy 3: Multiplication (jika bisa difaktorkan)
+        if (absNum > 1 && absNum !== 0) {
+            const factors = this.findFactors(absNum);
+            if (factors.length > 0) {
+                strategies.push(() => {
+                    const [a, b] = factors[Math.floor(Math.random() * factors.length)];
+                    return `(${sign}${a}*${b})`;
+                });
+            }
+        }
+        
+        // Strategy 4: Floor division
         if (num !== 0) {
             strategies.push(() => {
-                const factors = this.findFactors(Math.abs(num));
-                if (factors.length > 0) {
-                    const [a, b] = factors[Math.floor(Math.random() * factors.length)];
-                    const sign = num < 0 ? '-' : '';
-                    if (depth === 0) {
-                        return `(${sign}${this.obfuscateNumber(a, depth + 1)}*${this.obfuscateNumber(b, depth + 1)})`;
-                    }
-                    return `(${sign}${a}*${b})`;
-                }
-                return this.generateBaseExpression(num);
+                const mult = Math.floor(Math.random() * 10) + 2;
+                const dividend = num * mult;
+                return `(${dividend}//${mult})`;
             });
         }
         
-        // Strategy 3: Bitwise XOR (Luau compatible with bit32)
-        if (this.config.useBitwise && num >= 0 && num <= 0xFFFFFFFF) {
+        // Strategy 5: Bitwise XOR (untuk angka positif)
+        if (this.config.useBitwise && num >= 0 && num <= 0x7FFFFFFF) {
             strategies.push(() => {
-                const key = Math.floor(Math.random() * 0xFFFF);
-                const encoded = (num ^ key) >>> 0;
+                const key = Math.floor(Math.random() * 0xFFF) + 1;
+                const encoded = num ^ key;
                 return `bit32.bxor(${encoded},${key})`;
             });
         }
         
-        // Strategy 4: Bitwise operations combination
-        if (this.config.useBitwise && num >= 0 && num <= 0xFFFFFFFF) {
-            strategies.push(() => {
-                const shift = Math.floor(Math.random() * 8) + 1;
-                if (num % (1 << shift) === 0) {
-                    const base = num >> shift;
-                    return `bit32.lshift(${base},${shift})`;
-                }
-                return this.generateBaseExpression(num);
-            });
+        // Strategy 6: Bit shift (jika kelipatan 2)
+        if (this.config.useBitwise && num > 0 && num <= 0x7FFFFFFF) {
+            const shift = Math.floor(Math.log2(num));
+            if (shift > 0 && (1 << shift) === num) {
+                strategies.push(() => `bit32.lshift(1,${shift})`);
+            }
         }
         
-        // Strategy 5: Math functions
-        if (this.config.useMathFunctions) {
-            strategies.push(() => {
-                if (num >= 0) {
-                    const squared = num * num;
-                    if (squared <= Number.MAX_SAFE_INTEGER) {
-                        this.usedMathFuncs.add('floor');
-                        this.usedMathFuncs.add('sqrt');
-                        return `math.floor(math.sqrt(${squared}))`;
-                    }
-                }
-                return this.generateBaseExpression(num);
-            });
+        // Strategy 7: Hex representation
+        if (absNum > 9) {
+            strategies.push(() => `${sign}0x${absNum.toString(16).toUpperCase()}`);
         }
         
-        // Strategy 6: Negation trick
-        strategies.push(() => {
-            return `(-(-${Math.abs(num)})${num < 0 ? '*-1' : ''})`;
-        });
-        
-        // Strategy 7: Floor division
-        if (num !== 0) {
-            strategies.push(() => {
-                const multiplier = Math.floor(Math.random() * 10) + 2;
-                const dividend = num * multiplier;
-                return `(${dividend}//${multiplier})`;
-            });
+        // Strategy 8: String length trick
+        if (num >= 0 && num <= 20) {
+            strategies.push(() => `#"${'a'.repeat(num)}"`);
         }
         
-        // Strategy 8: Modulo trick
-        strategies.push(() => {
-            const base = num + Math.floor(Math.random() * 100) + 100;
-            const mod = base - num;
-            return `(${base}%${mod === 0 ? 1 : mod}+${num - (base % (mod === 0 ? 1 : mod))})`;
-        });
-        
-        // Select random strategy
         const strategy = strategies[Math.floor(Math.random() * strategies.length)];
         return strategy();
     }
     
-    /**
-     * Obfuscate floating point values
-     */
     private obfuscateFloat(num: number, depth: number): string {
         const strategies: (() => string)[] = [];
         
-        // Strategy 1: Split into integer + decimal
-        strategies.push(() => {
-            const intPart = Math.floor(num);
-            const decPart = num - intPart;
-            const decMultiplier = Math.pow(10, this.countDecimals(num));
-            const decInt = Math.round(decPart * decMultiplier);
-            return `(${this.obfuscateNumber(intPart, depth + 1)}+${decInt}/${decMultiplier})`;
-        });
-        
-        // Strategy 2: Fraction representation
+        // Strategy 1: Fraction
         strategies.push(() => {
             const precision = Math.pow(10, 6);
             const numerator = Math.round(num * precision);
@@ -688,85 +651,45 @@ class NumberObfuscator {
             return `(${numerator / gcd}/${denominator / gcd})`;
         });
         
-        // Strategy 3: Using math functions
-        if (this.config.useMathFunctions) {
-            strategies.push(() => {
-                this.usedMathFuncs.add('floor');
-                const multiplier = Math.pow(10, this.countDecimals(num));
-                const scaled = Math.round(num * multiplier);
-                return `(${scaled}/${multiplier})`;
-            });
-        }
+        // Strategy 2: Integer + decimal
+        strategies.push(() => {
+            const intPart = Math.floor(num);
+            const decPart = num - intPart;
+            const mult = 1000;
+            const decInt = Math.round(decPart * mult);
+            return `(${intPart}+${decInt}/${mult})`;
+        });
         
         const strategy = strategies[Math.floor(Math.random() * strategies.length)];
         return strategy();
     }
     
-    /**
-     * Generate base expression (minimal obfuscation)
-     */
     private generateBaseExpression(num: number): string {
         if (num === 0) {
-            const zeros = ['(1-1)', '(0*1)', 'bit32.bxor(1,1)', '(#"")'];
-            return zeros[Math.floor(Math.random() * (this.config.useBitwise ? zeros.length : 2))];
+            const exprs = ['(1-1)', '(0*1)', '#""'];
+            return exprs[Math.floor(Math.random() * exprs.length)];
         }
         if (num === 1) {
-            const ones = ['(2-1)', '(1*1)', '(1^1)', '#"a"', 'bit32.bxor(0,1)'];
-            return ones[Math.floor(Math.random() * (this.config.useBitwise ? ones.length : 3))];
+            const exprs = ['(2-1)', '#"a"', '(1^0)'];
+            return exprs[Math.floor(Math.random() * exprs.length)];
         }
-        
-        // For other numbers, use hex or simple expression
-        if (Number.isInteger(num) && num > 0) {
-            if (Math.random() > 0.5) {
-                return `0x${num.toString(16).toUpperCase()}`;
-            }
-        }
-        
         return num.toString();
     }
     
-    /**
-     * Helper: Find factor pairs
-     */
     private findFactors(n: number): [number, number][] {
         const factors: [number, number][] = [];
         const sqrt = Math.sqrt(n);
-        for (let i = 2; i <= sqrt && i < 100; i++) {
-            if (n % i === 0) {
-                factors.push([i, n / i]);
-            }
+        for (let i = 2; i <= sqrt && i < 50; i++) {
+            if (n % i === 0) factors.push([i, n / i]);
         }
         return factors;
     }
     
-    /**
-     * Helper: Count decimal places
-     */
-    private countDecimals(num: number): number {
-        if (Number.isInteger(num)) return 0;
-        const str = num.toString();
-        const decimalIndex = str.indexOf('.');
-        return decimalIndex === -1 ? 0 : str.length - decimalIndex - 1;
-    }
-    
-    /**
-     * Helper: Greatest common divisor
-     */
     private gcd(a: number, b: number): number {
         return b === 0 ? a : this.gcd(b, a % b);
     }
-    
-    /**
-     * Get used math functions for caching
-     */
-    getUsedMathFuncs(): Set<string> {
-        return this.usedMathFuncs;
-    }
 }
 
-/**
- * Apply number obfuscation to tokens
- */
 export function obfuscateNumbers(
     tokens: Token[], 
     config: Partial<NumberObfuscationConfig> = {}
@@ -781,7 +704,7 @@ export function obfuscateNumbers(
         if (t.type === TokenType.NUMBER && typeof t.literal === 'number') {
             const num = t.literal;
             
-            // Skip very small/simple numbers or in specific contexts
+            // Skip angka di konteks tertentu
             if (shouldSkipNumber(tokens, i, num)) {
                 result.push(t);
                 continue;
@@ -790,7 +713,6 @@ export function obfuscateNumbers(
             const obfuscated = obfuscator.obfuscateNumber(num);
             debug('NUMBER', `${num} → ${obfuscated}`);
             
-            // Wrap in parentheses and create expression tokens
             const exprTokens = expressionToTokens(obfuscated, t.line, t.column);
             result.push(...exprTokens);
             
@@ -805,41 +727,23 @@ export function obfuscateNumbers(
     return { tokens: result, numbersObfuscated };
 }
 
-/**
- * Determine if number should be skipped
- */
 function shouldSkipNumber(tokens: Token[], index: number, num: number): boolean {
-    // Skip loop bounds in for loops (for i = 1, 10)
-    // Look backwards for 'for' keyword
-    let forLoopContext = false;
-    for (let j = index - 1; j >= 0 && j > index - 10; j--) {
-        if (tokens[j].type === TokenType.FOR) {
-            forLoopContext = true;
-            break;
-        }
+    // Skip dalam for loop
+    for (let j = index - 1; j >= 0 && j > index - 8; j--) {
+        if (tokens[j].type === TokenType.FOR) return true;
         if (tokens[j].type === TokenType.DO || tokens[j].type === TokenType.END) break;
     }
     
-    // Skip simple increment values in for loops
-    if (forLoopContext && (num === 1 || num === -1)) {
-        return true;
-    }
-    
-    // Skip array indices that are simple (1, 2, 3)
+    // Skip index sederhana
     const prev = tokens[index - 1];
-    if (prev && prev.type === TokenType.LBRACKET && num >= 1 && num <= 10) {
-        // Allow obfuscation for larger indices
-        return num <= 3;
+    if (prev && prev.type === TokenType.LBRACKET && num >= 1 && num <= 5) {
+        return true;
     }
     
     return false;
 }
 
-/**
- * Convert expression string to tokens
- */
 function expressionToTokens(expr: string, line: number, column: number): Token[] {
-    // Simple tokenizer for generated expressions
     const result: Token[] = [];
     let i = 0;
     
@@ -868,48 +772,31 @@ function expressionToTokens(expr: string, line: number, column: number): Token[]
             }
         }
         else if (c === '"') {
-            // String literal
             let str = '"';
             i++;
-            while (i < expr.length && expr[i] !== '"') {
-                str += expr[i];
-                i++;
-            }
+            while (i < expr.length && expr[i] !== '"') { str += expr[i]; i++; }
             str += '"';
             i++;
             result.push({ type: TokenType.STRING, value: str, literal: str.slice(1, -1), line, column });
         }
         else if (/[0-9]/.test(c) || (c === '0' && expr[i + 1] === 'x')) {
-            // Number
             let numStr = '';
             if (c === '0' && expr[i + 1] === 'x') {
                 numStr = '0x';
                 i += 2;
-                while (i < expr.length && /[0-9a-fA-F]/.test(expr[i])) {
-                    numStr += expr[i];
-                    i++;
-                }
+                while (i < expr.length && /[0-9a-fA-F]/.test(expr[i])) { numStr += expr[i]; i++; }
                 result.push({ type: TokenType.NUMBER, value: numStr, literal: parseInt(numStr, 16), line, column });
             } else {
-                while (i < expr.length && /[0-9.]/.test(expr[i])) {
-                    numStr += expr[i];
-                    i++;
-                }
+                while (i < expr.length && /[0-9.]/.test(expr[i])) { numStr += expr[i]; i++; }
                 result.push({ type: TokenType.NUMBER, value: numStr, literal: parseFloat(numStr), line, column });
             }
         }
         else if (/[a-zA-Z_]/.test(c)) {
-            // Identifier (math, bit32, etc.)
             let ident = '';
-            while (i < expr.length && /[a-zA-Z0-9_]/.test(expr[i])) {
-                ident += expr[i];
-                i++;
-            }
+            while (i < expr.length && /[a-zA-Z0-9_]/.test(expr[i])) { ident += expr[i]; i++; }
             result.push({ type: TokenType.IDENTIFIER, value: ident, literal: ident, line, column });
         }
-        else {
-            i++;
-        }
+        else { i++; }
     }
     
     return result;
@@ -942,8 +829,7 @@ const SPACE_BEFORE = new Set([
 
 const NO_SPACE_AFTER = new Set([
     TokenType.LPAREN, TokenType.LBRACE, TokenType.LBRACKET, 
-    TokenType.DOT, TokenType.COLON, TokenType.HASH,
-    TokenType.NOT
+    TokenType.DOT, TokenType.COLON, TokenType.HASH, TokenType.NOT
 ]);
 
 const NO_SPACE_BEFORE = new Set([
@@ -960,23 +846,13 @@ export function tokensToCode(tokens: Token[], prependCode: string = ''): string 
         const prev = tokens[i - 1];
         if (t.type === TokenType.EOF) continue;
         
-        // Determine if space is needed
         if (prev && prev.type !== TokenType.EOF) {
             const needsSpace = !NO_SPACE_AFTER.has(prev.type) && 
                                !NO_SPACE_BEFORE.has(t.type) &&
                                (SPACE_AFTER.has(prev.type) || SPACE_BEFORE.has(t.type));
-            
-            // Special case: negative numbers after operators
-            if (t.type === TokenType.MINUS && prev && 
-                (prev.type === TokenType.ASSIGN || prev.type === TokenType.COMMA ||
-                 prev.type === TokenType.LPAREN || prev.type === TokenType.LBRACKET)) {
-                // No space before unary minus
-            } else if (needsSpace) {
-                code += ' ';
-            }
+            if (needsSpace) code += ' ';
         }
         
-        // Output token
         if (t.type === TokenType.STRING) {
             if (t.value.startsWith('"') && t.value.endsWith('"')) {
                 code += t.value;
@@ -1027,7 +903,6 @@ export interface ObfuscateResult {
 export function obfuscate(source: string, options: ObfuscateOptions = {}): ObfuscateResult {
     const startTime = Date.now();
     
-    // Defaults
     const opts = {
         debug: options.debug ?? false,
         renameVariables: options.renameVariables ?? true,
@@ -1037,7 +912,7 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
     };
     
     enableDebug(opts.debug);
-    debug('MAIN', 'Starting obfuscation v0.3.0', { options: opts });
+    debug('MAIN', 'Starting obfuscation v0.3.1', { options: opts });
     
     // Step 1: Tokenize
     let tokens = tokenize(source);
@@ -1063,14 +938,14 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
         debug('MAIN', 'String encryption complete', { encrypted: stringsEncrypted });
     }
     
-    // Step 4: Obfuscate numbers (NEW PHASE 3)
+    // Step 4: Obfuscate numbers
     let numbersObfuscated = 0;
     if (opts.obfuscateNumbers) {
         const numResult = obfuscateNumbers(tokens, {
             complexity: opts.numberComplexity,
             useBitwise: true,
             useMathFunctions: true,
-            maxDepth: opts.numberComplexity === 'high' ? 4 : opts.numberComplexity === 'medium' ? 3 : 2
+            maxDepth: opts.numberComplexity === 'high' ? 3 : opts.numberComplexity === 'medium' ? 2 : 1
         });
         tokens = numResult.tokens;
         numbersObfuscated = numResult.numbersObfuscated;
@@ -1101,9 +976,5 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
     
     return result;
 }
-
-// ============================================================================
-// EXPORT DEFAULT
-// ============================================================================
 
 export default { obfuscate, tokenize, enableDebug, getDebugLogs };
